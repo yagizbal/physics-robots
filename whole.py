@@ -283,11 +283,11 @@ def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, con
     anchor1 = body_a.world_to_local(anchor_point_world)
     anchor2 = body_b.world_to_local(anchor_point_world)
 
-    if joint_type == WELD_JOINT:
-        # Use very large finite values for force and bias for maximum rigidity
-        max_joint_force = 1e8
-        max_joint_bias = 1e7
+    # Use very large finite values for force and bias for maximum rigidity
+    max_joint_force = 1e9  # Increased for even more rigidity
+    max_joint_bias = 1e8   # Increased for even more rigidity
 
+    if joint_type == WELD_JOINT:
         # 1. PivotJoint (part of weld)
         pivot = pymunk.PivotJoint(body_a, body_b, anchor1, anchor2)
         pivot.max_force = max_joint_force
@@ -295,23 +295,39 @@ def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, con
         pivot.error_bias = 0
         space.add(pivot)
 
-        # 2. GearJoint (part of weld)
-        gear = pymunk.GearJoint(body_a, body_b, body_b.angle - body_a.angle, 1.0)
-        gear.max_force = max_joint_force
-        gear.max_bias = max_joint_bias
+        # 2. GearJoint (part of weld) - locks relative rotation
+        # Using ratio=1.0 means bodies should maintain the same relative angle
+        initial_phase = body_b.angle - body_a.angle
+        gear = pymunk.GearJoint(body_a, body_b, initial_phase, 1.0)
+        gear.max_force = max_joint_force * 10  # Even higher for rotation locking
+        gear.max_bias = max_joint_bias * 10    # Even higher for rotation locking
         gear.error_bias = 0
         space.add(gear)
 
         j_wrapper = WeldJoint(pivot) # Wrapper uses the pivot part
+        j_wrapper.gear_joint = gear  # Store gear joint for potential removal later
 
     elif joint_type == PIVOT_JOINT:
-        # Create a single PivotJoint constraint
+        # Create a single PivotJoint constraint with high force/bias settings
         pivot = pymunk.PivotJoint(body_a, body_b, anchor1, anchor2)
-        # You might want to set max_force/max_bias here too if you want limits,
-        # otherwise it defaults to infinite force/bias.
-        # pivot.max_force = 500000 # Example limit
-        space.add(pivot)
+        # Set high force/bias for position stability while allowing rotation
+        pivot.max_force = max_joint_force  # Same high value as weld joint
+        pivot.max_bias = max_joint_bias    # Same high value as weld joint
+        pivot.error_bias = 0
+        
+        # Add slide joint with min=max=distance to maintain rigid distance without restricting rotation
+        # This creates a fixed distance constraint that prevents stretching
+        current_distance = (body_a.position + anchor1 - body_b.position - anchor2).length
+        slide = pymunk.SlideJoint(body_a, body_b, anchor1, anchor2, current_distance, current_distance)
+        slide.max_force = max_joint_force
+        slide.max_bias = max_joint_bias
+        slide.error_bias = 0
+        
+        space.add(pivot, slide)
         j_wrapper = PivotJoint(pivot) # Use the PivotJoint wrapper
+        
+        # Store the slide joint reference in the PivotJoint wrapper for potential removal later
+        j_wrapper.slide_joint = slide
 
     # TODO: Adapt PinJoint creation similarly if needed
     # elif joint_type == PIN_JOINT:
@@ -816,14 +832,27 @@ def delete_shape(space, shapes, shape_obj):
 def delete_joint(space, joints, joint_obj, connected_bodies):
     """Removes a joint from the space and the joints list."""
     try:
+        # Wake up the connected bodies if they're sleeping
+        if joint_obj.body_a and joint_obj.body_a.is_sleeping:
+            joint_obj.body_a.activate()
+        if joint_obj.body_b and joint_obj.body_b.is_sleeping:
+            joint_obj.body_b.activate()
+            
         # For a weld joint, we need to remove both the pivot and gear joints
         if joint_obj.joint_type == WELD_JOINT:
-            # Find and remove the gear joint that's part of this weld
-            for constraint in space.constraints:
-                if isinstance(constraint, pymunk.GearJoint) and \
-                   constraint.a == joint_obj.body_a and constraint.b == joint_obj.body_b:
-                    space.remove(constraint)
-                    break
+            # Remove the gear joint if we stored it
+            if hasattr(joint_obj, 'gear_joint'):
+                space.remove(joint_obj.gear_joint)
+            else:
+                # Fallback to finding the gear joint if not stored
+                for constraint in space.constraints:
+                    if isinstance(constraint, pymunk.GearJoint) and \
+                       constraint.a == joint_obj.body_a and constraint.b == joint_obj.body_b:
+                        space.remove(constraint)
+                        break
+        # For a pivot joint with a slide constraint, remove that as well
+        elif joint_obj.joint_type == PIVOT_JOINT and hasattr(joint_obj, 'slide_joint'):
+            space.remove(joint_obj.slide_joint)
         
         # Remove the main joint from pymunk
         space.remove(joint_obj.joint)
@@ -848,6 +877,36 @@ def delete_joint(space, joints, joint_obj, connected_bodies):
     except Exception as e:
         print(f"Error deleting joint: {e}")
         return False
+
+def handle_property_change(obj, property_name, increase=True):
+    """Handles changing an object's properties."""
+    try:
+        # Make sure object is active before modifying
+        if obj.body.is_sleeping:
+            obj.body.activate()
+            
+        # Determine amount to change
+        if property_name == "density":
+            delta = 1.0 if increase else -1.0
+            obj.mass = max(1.0, obj.mass + delta)
+        elif property_name == "friction":
+            delta = 0.05 if increase else -0.05
+            obj.friction = max(0.0, min(1.0, obj.friction + delta))
+            obj.shape.friction = obj.friction
+        elif property_name == "color_r":
+            delta = 10 if increase else -10
+            r = max(0, min(255, obj.color[0] + delta))
+            obj.color = (r, obj.color[1], obj.color[2])
+        elif property_name == "color_g":
+            delta = 10 if increase else -10
+            g = max(0, min(255, obj.color[1] + delta))
+            obj.color = (obj.color[0], g, obj.color[2])
+        elif property_name == "color_b":
+            delta = 10 if increase else -10
+            b = max(0, min(255, obj.color[2] + delta))
+            obj.color = (obj.color[0], obj.color[1], b)
+    except Exception as e:
+        print(f"Error changing property {property_name}: {e}")
 
 def run_simulation():
     """
@@ -1002,11 +1061,22 @@ def run_simulation():
                         # For PinJoint or PivotJoint, check if click is near joint point
                         if isinstance(joint, PivotJoint) or isinstance(joint, WeldJoint):
                             if joint.body_a:  # Ensure body_a exists
-                                joint_pos = joint.body_a.local_to_world(joint.anchor_a_local)
-                                dist = math.sqrt((joint_pos[0] - p[0])**2 + (joint_pos[1] - p[1])**2)
-                                if dist <= joint_selection_distance:
-                                    clicked_joint = joint
-                                    break
+                                try:
+                                    # Use safe operation to get joint position
+                                    def get_joint_pos(anchor_local):
+                                        return joint.body_a.local_to_world(anchor_local)
+                                    
+                                    joint_pos = safe_body_operation(joint.body_a, 
+                                                                  get_joint_pos, 
+                                                                  joint.anchor_a_local)
+                                    
+                                    dist = math.sqrt((joint_pos[0] - p[0])**2 + (joint_pos[1] - p[1])**2)
+                                    if dist <= joint_selection_distance:
+                                        clicked_joint = joint
+                                        break
+                                except Exception as e:
+                                    print(f"Joint selection error: {e}")
+                                    continue
                     
                     if clicked_joint:
                         selected_joint_object = clicked_joint

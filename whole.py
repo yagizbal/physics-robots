@@ -257,19 +257,19 @@ def add_shape(space, shapes, shape_type, body, shape, color):
     shapes.append(obj)
     space.add(body, shape)
 
-def should_collide(body1, body2, connected_bodies):
+def should_collide(body1, body2, connected_components):
     """Check if two bodies should collide based on joint connections."""
     body1_id = id(body1)
     body2_id = id(body2)
     
-    # Check if these bodies are connected
-    for pair in connected_bodies:
-        if (body1_id == pair[0] and body2_id == pair[1]) or (body1_id == pair[1] and body2_id == pair[0]):
+    # Check if these bodies are in the same connected component
+    for component in connected_components:
+        if body1_id in component and body2_id in component:
             return False
     
     return True
 
-def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, connected_bodies):
+def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, connected_components):
     """
     Adds a joint to the space and the list of joints.
     Handles creation of appropriate Pymunk constraints based on type.
@@ -329,22 +329,51 @@ def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, con
         # Store the slide joint reference in the PivotJoint wrapper for potential removal later
         j_wrapper.slide_joint = slide
 
-    # TODO: Adapt PinJoint creation similarly if needed
-    # elif joint_type == PIN_JOINT:
-    #     pass # Placeholder
-
-    # Add this pair to connected bodies to prevent collision for *any* joint type
+    # Update connected components logic
     if body_a and body_b:
-        # Avoid adding duplicates
-        is_connected = False
-        for pair in connected_bodies:
-             if (body_a_id == pair[0] and body_b_id == pair[1]) or \
-                (body_a_id == pair[1] and body_b_id == pair[0]):
-                 is_connected = True
-                 break
-        if not is_connected:
-            connected_bodies.append((body_a_id, body_b_id))
-            print(f"Added bodies to no-collision list: {body_a_id}, {body_b_id} for {joint_type} joint")
+        body_a_id = id(body_a)
+        body_b_id = id(body_b)
+        
+        # Find which component each body belongs to
+        comp_a = None
+        comp_b = None
+        comp_a_idx = -1
+        comp_b_idx = -1
+        
+        for i, component in enumerate(connected_components):
+            if body_a_id in component:
+                comp_a = component
+                comp_a_idx = i
+            if body_b_id in component:
+                comp_b = component
+                comp_b_idx = i
+        
+        # Case 1: Both bodies are already in the same component
+        if comp_a is not None and comp_a is comp_b:
+            pass  # Nothing to do
+            
+        # Case 2: Body A is in a component, B is not
+        elif comp_a is not None and comp_b is None:
+            connected_components[comp_a_idx].add(body_b_id)
+            
+        # Case 3: Body B is in a component, A is not
+        elif comp_a is None and comp_b is not None:
+            connected_components[comp_b_idx].add(body_a_id)
+            
+        # Case 4: Both bodies are in different components
+        elif comp_a is not None and comp_b is not None:
+            # Merge components
+            merged_component = comp_a.union(comp_b)
+            connected_components[comp_a_idx] = merged_component
+            # Remove the other component
+            connected_components.pop(comp_b_idx)
+            
+        # Case 5: Neither body is in a component
+        else:
+            # Create a new component
+            connected_components.append({body_a_id, body_b_id})
+            
+        print(f"Updated connected components for {joint_type} joint. Total components: {len(connected_components)}")
 
     if j_wrapper:
         joints.append(j_wrapper)
@@ -406,7 +435,7 @@ def draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button
 
 def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, space,
                  adding_joint, # removed selected_object parameter
-                 joint_type, joints, connected_bodies,
+                 joint_type, joints, connected_components,
                  dragging_object=None, drag_offset=None): # removed dragged_complex parameter
     """
     Handles user input events. Simplified drag logic.
@@ -480,10 +509,16 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                     body2 = objects_at_pos[1].body
                     body1_id = id(body1)
                     body2_id = id(body2)
-                    already_connected = any((body1_id == p[0] and body2_id == p[1]) or \
-                                            (body1_id == p[1] and body2_id == p[0]) for p in connected_bodies)
+                    
+                    # Check if these bodies should already not collide
+                    already_connected = False
+                    for component in connected_components:
+                        if body1_id in component and body2_id in component:
+                            already_connected = True
+                            break
+                    
                     if not already_connected:
-                        add_joint(space, joints, new_joint_type, body1, body2, p_world, connected_bodies)
+                        add_joint(space, joints, new_joint_type, body1, body2, p_world, connected_components)
                         print(f"{new_joint_type.capitalize()} joint created between bodies near {p_world}")
                         new_adding_joint = False # Turn off after success
                     else:
@@ -829,7 +864,7 @@ def delete_shape(space, shapes, shape_obj):
         print(f"Error deleting shape: {e}")
         return False
 
-def delete_joint(space, joints, joint_obj, connected_bodies):
+def delete_joint(space, joints, joint_obj, connected_components):
     """Removes a joint from the space and the joints list."""
     try:
         # Wake up the connected bodies if they're sleeping
@@ -860,17 +895,49 @@ def delete_joint(space, joints, joint_obj, connected_bodies):
         # Remove from our list
         joints.remove(joint_obj)
         
-        # Also remove from connected_bodies if needed
+        # After removing a joint, we need to recalculate all connected components
+        # This is more complex than the add case but ensures correctness
         body_a_id = id(joint_obj.body_a) if joint_obj.body_a else None
         body_b_id = id(joint_obj.body_b) if joint_obj.body_b else None
         
         if body_a_id and body_b_id:
-            # Search for this pair
-            for i, pair in enumerate(connected_bodies):
-                if (pair[0] == body_a_id and pair[1] == body_b_id) or \
-                   (pair[0] == body_b_id and pair[1] == body_a_id):
-                    connected_bodies.pop(i)
-                    break
+            # We need to rebuild connected components from remaining joints
+            # First, clear all current components
+            connected_components.clear()
+            
+            # For each remaining joint, add its bodies to components
+            for j in joints:
+                if j.body_a and j.body_b:
+                    j_body_a_id = id(j.body_a)
+                    j_body_b_id = id(j.body_b)
+                    
+                    # Find which component each body belongs to
+                    comp_a = None
+                    comp_b = None
+                    comp_a_idx = -1
+                    comp_b_idx = -1
+                    
+                    for i, component in enumerate(connected_components):
+                        if j_body_a_id in component:
+                            comp_a = component
+                            comp_a_idx = i
+                        if j_body_b_id in component:
+                            comp_b = component
+                            comp_b_idx = i
+                    
+                    # Apply same logic as add_joint
+                    if comp_a is not None and comp_a is comp_b:
+                        pass  # Nothing to do
+                    elif comp_a is not None and comp_b is None:
+                        connected_components[comp_a_idx].add(j_body_b_id)
+                    elif comp_a is None and comp_b is not None:
+                        connected_components[comp_b_idx].add(j_body_a_id)
+                    elif comp_a is not None and comp_b is not None:
+                        merged_component = comp_a.union(comp_b)
+                        connected_components[comp_a_idx] = merged_component
+                        connected_components.pop(comp_b_idx)
+                    else:
+                        connected_components.append({j_body_a_id, j_body_b_id})
         
         print(f"Deleted joint: {joint_obj.joint_type}")
         return True
@@ -908,6 +975,15 @@ def handle_property_change(obj, property_name, increase=True):
     except Exception as e:
         print(f"Error changing property {property_name}: {e}")
 
+def safe_body_operation(body, operation, *args):
+    """Safely performs an operation on a body, handling potential errors."""
+    try:
+        if body and not body._removed:
+            return operation(*args)
+    except Exception as e:
+        print(f"Body operation error: {e}")
+    return None
+
 def run_simulation():
     """
     Runs the main game loop.
@@ -927,9 +1003,9 @@ def run_simulation():
     space = pymunk.Space()
     space.gravity = GRAVITY
     space.sleep_time_threshold = 0.5
-    connected_bodies = []
+    connected_components = []  # Change from connected_bodies to connected_components
     handler = space.add_collision_handler(1, 1)
-    handler.begin = lambda arb, sp, data: should_collide(arb.shapes[0].body, arb.shapes[1].body, connected_bodies)
+    handler.begin = lambda arb, sp, data: should_collide(arb.shapes[0].body, arb.shapes[1].body, connected_components)
     floor_body, floor_shape = create_floor(space)
 
     # Game state
@@ -1031,7 +1107,7 @@ def run_simulation():
                         if btn_rect.collidepoint(pos):
                             if btn_name == "delete":
                                 # Delete the selected joint
-                                if delete_joint(space, joints, selected_joint_object, connected_bodies):
+                                if delete_joint(space, joints, selected_joint_object, connected_components):
                                     selected_joint_object = None
                             clicked_prop_button = True
                             break
@@ -1099,7 +1175,7 @@ def run_simulation():
             dragging_object, drag_offset = handle_input(
                 event, game_mode, selected_shape, drawing, start_pos, shapes, space,
                 adding_joint, # removed selected_object argument
-                joint_type, joints, connected_bodies, # Pass None for selected_object
+                joint_type, joints, connected_components, # Pass None for selected_object
                 dragging_object, drag_offset # removed dragged_complex argument
             )
 

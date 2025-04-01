@@ -22,6 +22,7 @@ PIN_JOINT = 'pin'
 PIVOT_JOINT = 'pivot'
 WELD_JOINT = 'weld'
 NO_COLLISION_GROUP = 1  # Collision group for objects that shouldn't collide
+CAMERA_MOVE_SPEED = 20  # Pixels per key press
 
 class Shape:
     """
@@ -229,22 +230,22 @@ def create_circle(x, y, radius):
     shape.collision_type = 1
     return body, shape
 
-def to_pygame(p):
+def to_pygame(p, camera_offset=(0, 0)):
     """
-    Convert Pymunk coordinates to Pygame coordinates.
+    Convert Pymunk coordinates to Pygame coordinates with camera offset.
     """
     if hasattr(p, 'x') and hasattr(p, 'y'):
         # It's a Vec2d or similar object
-        return int(p.x), int(-p.y + SCREEN_HEIGHT)
+        return int(p.x - camera_offset[0]), int(-p.y + SCREEN_HEIGHT - camera_offset[1])
     else:
         # It's a tuple (x, y)
-        return int(p[0]), int(-p[1] + SCREEN_HEIGHT)
+        return int(p[0] - camera_offset[0]), int(-p[1] + SCREEN_HEIGHT - camera_offset[1])
 
-def from_pygame(p):
+def from_pygame(p, camera_offset=(0, 0)):
     """
-    Convert Pygame coordinates to Pymunk coordinates.
+    Convert Pygame coordinates to Pymunk coordinates with camera offset.
     """
-    return p[0], SCREEN_HEIGHT - p[1]
+    return p[0] + camera_offset[0], SCREEN_HEIGHT - p[1] + camera_offset[1]
 
 def add_shape(space, shapes, shape_type, body, shape, color):
     """
@@ -379,13 +380,14 @@ def add_joint(space, joints, joint_type, body_a, body_b, anchor_point_world, con
         joints.append(j_wrapper)
 
 def draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button_text,
-            weld_joint_button_rect, weld_joint_button_text, # Renamed for clarity
-            pivot_joint_button_rect, pivot_joint_button_text, # New pivot button
+            weld_joint_button_rect, weld_joint_button_text,
+            pivot_joint_button_rect, pivot_joint_button_text,
             rect_button_rect, rect_button_text,
             circle_button_rect, circle_button_text,
-            adding_joint, current_joint_type): # Added current_joint_type
+            adding_joint, current_joint_type, camera_offset=(0, 0)):
     """
-    Draws the UI elements.
+    Draws the UI elements. UI elements are in screen space, not world space,
+    so they are not affected by camera position.
     """
     # Top Menu Bar (Shapes, Start/Stop)
     pygame.draw.rect(screen, GRAY, (0, 0, SCREEN_WIDTH, 40))
@@ -433,11 +435,16 @@ def draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button
         sim_text_surf = font.render("Running Simulation", True, RED)
         screen.blit(sim_text_surf, (SCREEN_WIDTH / 2 - sim_text_surf.get_width() / 2, 10))
 
+    # Optional: Display camera position for debugging
+    camera_text = font.render(f"Camera: {camera_offset[0]}, {camera_offset[1]}", True, BLACK)
+    screen.blit(camera_text, (SCREEN_WIDTH - 240, 75))
+
 def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, space,
                  adding_joint, joint_type, joints, connected_components,
-                 dragging_object=None, drag_offset=None, dragged_complex=None):
+                 dragging_object=None, drag_offset=None, dragged_complex=None,
+                 camera_offset=(0, 0)):
     """
-    Handles user input events. Modified to maintain the dragged_complex.
+    Handles user input events. Modified to account for camera position.
     """
     # Default return values
     new_game_mode = game_mode
@@ -448,7 +455,8 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
     new_joint_type = joint_type
     new_dragging_object = dragging_object
     new_drag_offset = drag_offset
-    new_dragged_complex = dragged_complex if dragged_complex else []  # Maintain existing complex
+    new_dragged_complex = dragged_complex if dragged_complex else []
+    new_camera_offset = camera_offset  # Pass camera offset through
 
     if event.type == pygame.MOUSEBUTTONDOWN:
         pos = pygame.mouse.get_pos()
@@ -489,7 +497,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                 new_dragged_complex = []
             # --- Joint Creation Logic ---
             elif adding_joint:
-                p_world = from_pygame(pos)
+                p_world = from_pygame(pos, camera_offset)
                 search_radius = 15
                 objects_at_pos = []
                 # Find overlapping objects
@@ -542,7 +550,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                               weld_joint_button_rect, pivot_joint_button_rect]
                 clicked_ui = any(btn.collidepoint(pos) for btn in ui_buttons)
                 if not clicked_ui and not adding_joint and not drawing:
-                    p = from_pygame(pos)
+                    p = from_pygame(pos, camera_offset)
                     clicked_object = None
                     # Find the topmost object clicked
                     for obj in reversed(shapes):
@@ -587,7 +595,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                 new_game_mode = EDIT_MODE
                 new_dragging_object = None # Stop dragging if any
             else: # Try dragging in sim mode
-                p = from_pygame(pos)
+                p = from_pygame(pos, camera_offset)
                 clicked_object_sim = None
                 for obj in reversed(shapes):
                      # ... (precise shape query logic - keep this) ...
@@ -608,7 +616,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
 
     elif event.type == pygame.MOUSEMOTION:
         if dragging_object:
-            p = from_pygame(pygame.mouse.get_pos())
+            p = from_pygame(pygame.mouse.get_pos(), camera_offset)
             if game_mode == EDIT_MODE:
                 # Use existing dragged_complex or rebuild it if needed
                 if not new_dragged_complex:
@@ -659,8 +667,8 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
         elif selected_shape and drawing:
             # ... (existing shape creation logic - keep this) ...
             end_pos_up = pos
-            x1, y1 = from_pygame(start_pos)
-            x2, y2 = from_pygame(end_pos_up)
+            x1, y1 = from_pygame(start_pos, camera_offset)
+            x2, y2 = from_pygame(end_pos_up, camera_offset)
 
             if selected_shape == RECTANGLE:
                 width = abs(x2 - x1)
@@ -671,7 +679,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                     body, shape = create_rectangle(x, y - height, width, height)
                     add_shape(space, shapes, RECTANGLE, body, shape, BLUE)
             elif selected_shape == CIRCLE:
-                center_x, center_y = from_pygame(start_pos)
+                center_x, center_y = from_pygame(start_pos, camera_offset)
                 radius = math.dist(start_pos, end_pos_up)
                 if radius > 5:
                     body, shape = create_circle(center_x, center_y, radius)
@@ -681,16 +689,30 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
             new_drawing = False
             new_start_pos = (0, 0)
 
-    # Return updated state including dragged_complex
+    # Handle camera movement with arrow keys
+    elif event.type == pygame.KEYDOWN:
+        if game_mode == EDIT_MODE:  # Only allow camera movement in edit mode
+            if event.key == pygame.K_LEFT:
+                new_camera_offset = (camera_offset[0] - CAMERA_MOVE_SPEED, camera_offset[1])
+            elif event.key == pygame.K_RIGHT:
+                new_camera_offset = (camera_offset[0] + CAMERA_MOVE_SPEED, camera_offset[1])
+            elif event.key == pygame.K_UP:
+                new_camera_offset = (camera_offset[0], camera_offset[1] - CAMERA_MOVE_SPEED)
+            elif event.key == pygame.K_DOWN:
+                new_camera_offset = (camera_offset[0], camera_offset[1] + CAMERA_MOVE_SPEED)
+
+    # Return updated state including camera_offset
     return new_game_mode, new_selected_shape, new_drawing, new_start_pos, \
            new_adding_joint, new_joint_type, \
-           new_dragging_object, new_drag_offset, new_dragged_complex
+           new_dragging_object, new_drag_offset, new_dragged_complex, \
+           new_camera_offset
 
-def draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos):
+def draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos, camera_offset=(0, 0)):
     """
-    Draws the shape being created (before it's added).
+    Draws the shape being created (before it's added). Adjusts for camera offset.
     """
     if selected_shape and drawing and end_pos:
+        # Apply camera offset to drawing preview
         if selected_shape == RECTANGLE:
             x1, y1 = start_pos
             x2, y2 = end_pos
@@ -1099,6 +1121,9 @@ def run_simulation():
     property_buttons = {} # For properties menu
     joint_menu_buttons = {} # For joint menu
 
+    # Initialize camera position
+    camera_offset = (0, 0)
+
     while running:
         # Store previous mode for state change detection
         previous_mode = game_mode
@@ -1112,7 +1137,7 @@ def run_simulation():
                 running = False
                 break # Exit event loop immediately
 
-            # Initialize this variable at the start of each event processing
+            # Initialize variable for property button clicks
             clicked_prop_button = False
             
             # Handle property button clicks first if menu is active
@@ -1176,7 +1201,7 @@ def run_simulation():
                     selected_joint_object = None
                     
                     # Check for joint selection first
-                    p = from_pygame(pos)
+                    p = from_pygame(pos, camera_offset)
                     clicked_joint = None
                     joint_selection_distance = 15  # Radius to check for joint selection
                     
@@ -1217,19 +1242,20 @@ def run_simulation():
                             except Exception as e:
                                 print(f"Selection query error: {e}")
 
-            # Handle general input (including MOUSEBUTTONDOWN not handled above)
+            # Handle general input with camera offset
             game_mode, selected_shape, drawing, start_pos, adding_joint, joint_type, \
-            dragging_object, drag_offset, dragged_complex = handle_input(
+            dragging_object, drag_offset, dragged_complex, camera_offset = handle_input(
                 event, game_mode, selected_shape, drawing, start_pos, shapes, space,
                 adding_joint, joint_type, joints, connected_components,
-                dragging_object, drag_offset, dragged_complex
+                dragging_object, drag_offset, dragged_complex,
+                camera_offset
             )
 
-            # Update end_pos for drawing preview based on MOUSEMOTION handled inside handle_input
+            # Update end_pos for drawing preview
             if event.type == pygame.MOUSEMOTION and drawing:
                  end_pos = pygame.mouse.get_pos()
             elif event.type != pygame.MOUSEMOTION:
-                 end_pos = None # Clear preview if not moving mouse while drawing
+                 end_pos = None
 
         # --- State Management for Simulation Start/Stop ---
         mode_changed = previous_mode != game_mode
@@ -1257,29 +1283,90 @@ def run_simulation():
                 dragging_object = None
                 drag_offset = None
 
-        # --- Drawing ---
+        # --- Drawing (with camera offset) ---
         screen.fill(WHITE)
-
-        # Draw Floor (visual representation)
-        pygame.draw.line(screen, BLACK, to_pygame((0, 40)), to_pygame((SCREEN_WIDTH, 40)), 10) # Draw floor line based on create_floor Y
-
-        # Draw all shapes and joints
-        draw_shapes(screen, shapes)
-        draw_joints(screen, joints)
-
-        # Draw shape being created (preview)
+        
+        # Draw Floor with camera offset
+        floor_start = to_pygame((0, 40), camera_offset)
+        floor_end = to_pygame((SCREEN_WIDTH, 40), camera_offset)
+        pygame.draw.line(screen, BLACK, floor_start, floor_end, 10)
+        
+        # Draw all shapes with camera offset
+        for obj in shapes:
+            # Override the draw methods to account for camera
+            if isinstance(obj, Rectangle):
+                # Get vertices relative to the body's center of gravity
+                local_verts = obj.shape.get_vertices()
+                # Transform local vertices to world coordinates 
+                world_verts = [obj.body.local_to_world(v) for v in local_verts]
+                # Convert world coordinates to Pygame screen coordinates with camera offset
+                pygame_verts = [to_pygame(v, camera_offset) for v in world_verts]
+                # Draw the polygon
+                pygame.draw.polygon(screen, obj.color, pygame_verts)
+            elif isinstance(obj, Circle):
+                position = to_pygame(obj.body.position, camera_offset)
+                pygame.draw.circle(screen, obj.color, position, int(obj.radius))
+                angle_radians = obj.body.angle
+                end_point_x = position[0] + obj.radius * math.cos(angle_radians)
+                end_point_y = position[1] + obj.radius * math.sin(angle_radians)
+                pygame.draw.line(screen, BLACK, position, (end_point_x, end_point_y), 2)
+        
+        # Draw joints with camera offset
+        for joint in joints:
+            if isinstance(joint, PinJoint):
+                if joint.body_a:
+                    pos_a = to_pygame(joint.body_a.position + joint.anchor_a, camera_offset)
+                else:
+                    pos_a = to_pygame(joint.anchor_a, camera_offset)
+                if joint.body_b:
+                    pos_b = to_pygame(joint.body_b.position + joint.anchor_b, camera_offset)
+                else:
+                    pos_b = to_pygame(joint.anchor_b, camera_offset)
+                pygame.draw.line(screen, GREEN, pos_a, pos_b, 2)
+                pygame.draw.circle(screen, RED, pos_a, 5)
+                pygame.draw.circle(screen, RED, pos_b, 5)
+            elif isinstance(joint, PivotJoint):
+                if joint.body_a:
+                    current_joint_world_pos = joint.body_a.local_to_world(joint.anchor_a_local)
+                    joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
+                    pygame.draw.circle(screen, RED, joint_pos_pygame, 6)
+                    pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)
+                    
+                    if joint.body_b:
+                        pos_a = to_pygame(joint.body_a.position, camera_offset)
+                        pos_b = to_pygame(joint.body_b.position, camera_offset)
+                        pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_a, 1)
+                        pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_b, 1)
+            elif isinstance(joint, WeldJoint):
+                if joint.body_a:
+                    current_joint_world_pos = joint.body_a.local_to_world(joint.anchor_a_local)
+                    joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
+                    
+                    square_size = 10
+                    pygame.draw.rect(screen, BLACK,
+                                    (joint_pos_pygame[0] - square_size//2,
+                                     joint_pos_pygame[1] - square_size//2,
+                                     square_size, square_size))
+                    
+                    if joint.body_b:
+                        pos_a = to_pygame(joint.body_a.position, camera_offset)
+                        pos_b = to_pygame(joint.body_b.position, camera_offset)
+                        pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_a, 1)
+                        pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_b, 1)
+        
+        # Draw shape being created with camera offset
         if drawing and start_pos and end_pos:
              draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos)
-
-        # Draw UI on top
+        
+        # Draw UI elements (no camera offset since they're in screen space)
         draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button_text,
                 weld_joint_button_rect, weld_joint_button_text,
                 pivot_joint_button_rect, pivot_joint_button_text,
                 rect_button_rect, rect_button_text,
                 circle_button_rect, circle_button_text,
-                adding_joint, joint_type) # Pass joint_type for highlighting
-
-        # Draw Properties Menu if an object is selected in Edit mode
+                adding_joint, joint_type, camera_offset)
+        
+        # Draw Properties Menu if an object is selected
         if game_mode == EDIT_MODE:
             if selected_shape_object:
                 property_buttons = draw_properties_menu(screen, selected_shape_object, font) or {}
@@ -1297,7 +1384,11 @@ def run_simulation():
         if game_mode == SIMULATION_MODE:
             dt = 1.0 / FPS
             space.step(dt)
-
+        
+        # Print camera offset for debugging (add this temporarily)
+        print(f"Current camera offset: {camera_offset}")
+        
+        # Update the display
         pygame.display.flip()
         clock.tick(FPS)
 

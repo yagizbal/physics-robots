@@ -434,11 +434,10 @@ def draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button
         screen.blit(sim_text_surf, (SCREEN_WIDTH / 2 - sim_text_surf.get_width() / 2, 10))
 
 def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, space,
-                 adding_joint, # removed selected_object parameter
-                 joint_type, joints, connected_components,
-                 dragging_object=None, drag_offset=None): # removed dragged_complex parameter
+                 adding_joint, joint_type, joints, connected_components,
+                 dragging_object=None, drag_offset=None, dragged_complex=None):
     """
-    Handles user input events. Simplified drag logic.
+    Handles user input events. Modified to maintain the dragged_complex.
     """
     # Default return values
     new_game_mode = game_mode
@@ -449,7 +448,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
     new_joint_type = joint_type
     new_dragging_object = dragging_object
     new_drag_offset = drag_offset
-    # removed new_dragged_complex
+    new_dragged_complex = dragged_complex if dragged_complex else []  # Maintain existing complex
 
     if event.type == pygame.MOUSEBUTTONDOWN:
         pos = pygame.mouse.get_pos()
@@ -461,28 +460,33 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                 new_drawing = False
                 new_adding_joint = False
                 new_dragging_object = None # Stop dragging
+                new_dragged_complex = []   # Clear complex
             elif rect_button_rect.collidepoint(pos):
                 new_selected_shape = RECTANGLE
                 new_drawing = False
                 new_adding_joint = False
                 new_dragging_object = None
+                new_dragged_complex = []
             elif circle_button_rect.collidepoint(pos):
                 new_selected_shape = CIRCLE
                 new_drawing = False
                 new_adding_joint = False
                 new_dragging_object = None
+                new_dragged_complex = []
             elif weld_joint_button_rect.collidepoint(pos):
                 new_adding_joint = not adding_joint if joint_type == WELD_JOINT else True
                 new_joint_type = WELD_JOINT
                 new_selected_shape = None
                 new_drawing = False
                 new_dragging_object = None
+                new_dragged_complex = []
             elif pivot_joint_button_rect.collidepoint(pos):
                 new_adding_joint = not adding_joint if joint_type == PIVOT_JOINT else True
                 new_joint_type = PIVOT_JOINT
                 new_selected_shape = None
                 new_drawing = False
                 new_dragging_object = None
+                new_dragged_complex = []
             # --- Joint Creation Logic ---
             elif adding_joint:
                 p_world = from_pygame(pos)
@@ -531,7 +535,8 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                  new_start_pos = pos
                  new_adding_joint = False
                  new_dragging_object = None
-            # --- Edit Mode Drag Start (Simplified) ---
+                 new_dragged_complex = []
+            # --- Edit Mode Drag Start (Updated for complex objects) ---
             else:
                 ui_buttons = [start_button_rect, rect_button_rect, circle_button_rect,
                               weld_joint_button_rect, pivot_joint_button_rect]
@@ -541,7 +546,6 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                     clicked_object = None
                     # Find the topmost object clicked
                     for obj in reversed(shapes):
-                        # ... (precise shape query logic - keep this) ...
                         try:
                             info = obj.shape.point_query(p)
                             is_inside = info.distance < 0 if hasattr(info, 'distance') else False
@@ -552,11 +556,28 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                             print(f"Drag start query error: {e}")
 
                     if clicked_object:
+                        # Build the complex of connected objects using connected_components
+                        new_dragged_complex = []  # Reset the complex
+                        clicked_body_id = id(clicked_object.body)
+                        
+                        # Find which component contains the clicked object
+                        for component in connected_components:
+                            if clicked_body_id in component:
+                                # Add all objects that belong to this component
+                                for shape in shapes:
+                                    if id(shape.body) in component:
+                                        new_dragged_complex.append(shape)
+                                break
+                        
+                        # If not part of any component, just drag the clicked object
+                        if not new_dragged_complex:
+                            new_dragged_complex = [clicked_object]
+                            
+                        # Store reference to the primary dragged object and offset
                         offset = clicked_object.body.position - p
-                        # Only store the single object and offset
                         new_dragging_object = clicked_object
                         new_drag_offset = offset
-                        print(f"Dragging object: {type(new_dragging_object)}")
+                        print(f"Dragging complex with {len(new_dragged_complex)} objects")
                         new_selected_shape = None
                         new_drawing = False
                         new_adding_joint = False
@@ -589,9 +610,29 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
         if dragging_object:
             p = from_pygame(pygame.mouse.get_pos())
             if game_mode == EDIT_MODE:
-                # Simplified: Move only the dragged object
-                dragging_object.body.position = p + new_drag_offset
-                dragging_object.body.activate() # Keep awake while dragging
+                # Use existing dragged_complex or rebuild it if needed
+                if not new_dragged_complex:
+                    dragged_body_id = id(dragging_object.body)
+                    for component in connected_components:
+                        if dragged_body_id in component:
+                            # Rebuild dragged_complex
+                            new_dragged_complex = [obj for obj in shapes if id(obj.body) in component]
+                            break
+                    
+                    # If still empty, just use the main dragged object
+                    if not new_dragged_complex:
+                        new_dragged_complex = [dragging_object]
+                
+                # Calculate the position delta for the primary dragged object
+                target_pos = p + new_drag_offset
+                delta_pos = target_pos - dragging_object.body.position
+                
+                # Move all objects in the complex by the same delta
+                for obj in new_dragged_complex:
+                    obj.body.position += delta_pos
+                    # Make sure to activate the body so it registers position changes
+                    obj.body.activate()
+            
             elif game_mode == SIMULATION_MODE:
                 # Apply velocity to follow mouse (existing logic)
                 target_pos = p + new_drag_offset
@@ -607,9 +648,14 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
         if dragging_object:
             # Stop dragging
             if game_mode == EDIT_MODE:
-                 dragging_object.body.sleep() # Allow sleeping after drag in edit mode
+                # Put all objects in the complex to sleep
+                for obj in new_dragged_complex:
+                    obj.body.sleep()
+            
             new_dragging_object = None
             new_drag_offset = None
+            new_dragged_complex = []  # Clear the complex when done dragging
+        
         elif selected_shape and drawing:
             # ... (existing shape creation logic - keep this) ...
             end_pos_up = pos
@@ -635,10 +681,10 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
             new_drawing = False
             new_start_pos = (0, 0)
 
-    # Return updated state tuple (8 items now)
+    # Return updated state including dragged_complex
     return new_game_mode, new_selected_shape, new_drawing, new_start_pos, \
            new_adding_joint, new_joint_type, \
-           new_dragging_object, new_drag_offset
+           new_dragging_object, new_drag_offset, new_dragged_complex
 
 def draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos):
     """
@@ -1021,6 +1067,7 @@ def run_simulation():
     initial_body_states = {}
     dragging_object = None
     drag_offset = None
+    dragged_complex = [] # This will now persist between events
     selected_shape_object = None # For properties menu
     selected_joint_object = None # For joint menu
 
@@ -1172,11 +1219,10 @@ def run_simulation():
 
             # Handle general input (including MOUSEBUTTONDOWN not handled above)
             game_mode, selected_shape, drawing, start_pos, adding_joint, joint_type, \
-            dragging_object, drag_offset = handle_input(
+            dragging_object, drag_offset, dragged_complex = handle_input(
                 event, game_mode, selected_shape, drawing, start_pos, shapes, space,
-                adding_joint, # removed selected_object argument
-                joint_type, joints, connected_components, # Pass None for selected_object
-                dragging_object, drag_offset # removed dragged_complex argument
+                adding_joint, joint_type, joints, connected_components,
+                dragging_object, drag_offset, dragged_complex
             )
 
             # Update end_pos for drawing preview based on MOUSEMOTION handled inside handle_input

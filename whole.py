@@ -12,6 +12,8 @@ GRAY = (200, 200, 200)
 BLUE = (0, 0, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
+SKY_BLUE = (135, 206, 235)
+LIGHT_ORANGE = (245, 155, 66)
 FPS = 60
 GRAVITY = (0, -980)  # Negative value because Pymunk's y-axis grows upward
 EDIT_MODE = 0
@@ -49,7 +51,7 @@ class Shape:
                 # For polygons like rectangles
                 self.body.moment = pymunk.moment_for_poly(self.mass, self.shape.get_vertices())
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the shape on the screen.  To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement the draw method.")
 
@@ -62,15 +64,11 @@ class Rectangle(Shape):
         self.width = width
         self.height = height
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the rectangle on the screen."""
-        # Get vertices relative to the body's center of gravity
         local_verts = self.shape.get_vertices()
-        # Transform local vertices to world coordinates using the body's position and angle
         world_verts = [self.body.local_to_world(v) for v in local_verts]
-        # Convert world coordinates to Pygame screen coordinates
-        pygame_verts = [to_pygame(v) for v in world_verts]
-        # Draw the polygon using the calculated screen coordinates
+        pygame_verts = [to_pygame(v, camera_offset) for v in world_verts]
         pygame.draw.polygon(screen, self.color, pygame_verts)
         # Optional: Draw outline
         # pygame.draw.polygon(screen, BLACK, pygame_verts, 1)
@@ -83,9 +81,9 @@ class Circle(Shape):
         super().__init__(body, shape, color)
         self.radius = radius
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the circle on the screen."""
-        position = to_pygame(self.body.position)
+        position = to_pygame(self.body.position, camera_offset)
         pygame.draw.circle(screen, self.color, position, int(self.radius))
         angle_radians = self.body.angle
         end_point_x = position[0] + self.radius * math.cos(angle_radians)
@@ -102,7 +100,7 @@ class Joint:
         self.body_a = joint.a
         self.body_b = joint.b
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the joint on the screen.  To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement the draw method.")
 
@@ -115,19 +113,19 @@ class PinJoint(Joint):
         self.anchor_a = joint.anchor_a
         self.anchor_b = joint.anchor_b
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the pin joint."""
         if self.body_a:
-            pos_a = to_pygame(self.body_a.position + self.anchor_a)
+            pos_a = to_pygame(self.body_a.position + self.anchor_a, camera_offset)
         else:
-            pos_a = to_pygame(self.anchor_a)
+            pos_a = to_pygame(self.anchor_a, camera_offset)
         if self.body_b:
-            pos_b = to_pygame(self.body_b.position + self.anchor_b)
+            pos_b = to_pygame(self.body_b.position + self.anchor_b, camera_offset)
         else:
-            pos_b = to_pygame(self.anchor_b)
-        pygame.draw.line(screen, GREEN, pos_a, pos_b, 2)
-        pygame.draw.circle(screen, RED, pos_a, 5)
-        pygame.draw.circle(screen, RED, pos_b, 5)
+            pos_b = to_pygame(self.anchor_b, camera_offset)
+        pygame.draw.line(screen, BLACK, pos_a, pos_b, 2)
+        pygame.draw.circle(screen, BLACK, pos_a, 5)
+        pygame.draw.circle(screen, BLACK, pos_b, 5)
 
 class PivotJoint(Joint):
     """
@@ -141,25 +139,22 @@ class PivotJoint(Joint):
         self.body_a_id = id(joint.a) # Store IDs for potential use
         self.body_b_id = id(joint.b)
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the pivot joint."""
-        # Calculate the current world position of the anchor point on body_a
         if not self.body_a:
-            return # Cannot draw if body_a is missing
+            return
 
         current_joint_world_pos = self.body_a.local_to_world(self.anchor_a_local)
-        joint_pos_pygame = to_pygame(current_joint_world_pos)
+        joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
 
-        # Draw a circle marker for the pivot point
-        pygame.draw.circle(screen, RED, joint_pos_pygame, 6) # Slightly larger circle
-        pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1) # Black outline
+        pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6)
+        pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)
 
-        # Optional: Draw lines to connected bodies' centers
         if self.body_b:
-            pos_a = to_pygame(self.body_a.position)
-            pos_b = to_pygame(self.body_b.position)
-            pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_a, 1)
-            pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_b, 1)
+            pos_a = to_pygame(self.body_a.position, camera_offset)
+            pos_b = to_pygame(self.body_b.position, camera_offset)
+            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_a, 1)
+            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_b, 1)
 
 class WeldJoint(Joint):
     """
@@ -175,31 +170,25 @@ class WeldJoint(Joint):
         self.body_a_id = id(pivot_joint.a)
         self.body_b_id = id(pivot_joint.b)
 
-    def draw(self, screen):
+    def draw(self, screen, camera_offset=(0, 0)):
         """Draws the weld joint."""
-        # Calculate the current world position of the anchor point on body_a
-        # Ensure body_a exists before attempting to use it
         if not self.body_a:
-             return # Cannot draw if body_a is missing
+             return
 
         current_joint_world_pos = self.body_a.local_to_world(self.anchor_a_local)
-        joint_pos_pygame = to_pygame(current_joint_world_pos)
+        joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
 
-        # Draw a black square at the joint's current position
         square_size = 10
         pygame.draw.rect(screen, BLACK,
                         (joint_pos_pygame[0] - square_size//2,
                          joint_pos_pygame[1] - square_size//2,
                          square_size, square_size))
 
-        # Draw lines to connected bodies' centers (optional, but can be helpful)
-        # Ensure body_b exists before attempting to use it
         if self.body_b:
-            pos_a = to_pygame(self.body_a.position)
-            pos_b = to_pygame(self.body_b.position)
-            # Draw lines from the joint marker to the center of each body
-            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_a, 1) # Thinner line
-            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_b, 1) # Thinner line
+            pos_a = to_pygame(self.body_a.position, camera_offset)
+            pos_b = to_pygame(self.body_b.position, camera_offset)
+            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_a, 1)
+            pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_b, 1)
 
 def create_rectangle(x, y, width, height):
     """
@@ -247,7 +236,7 @@ def from_pygame(p, camera_offset=(0, 0)):
     """
     return p[0] + camera_offset[0], SCREEN_HEIGHT - p[1] + camera_offset[1]
 
-def add_shape(space, shapes, shape_type, body, shape, color):
+def add_shape(space, shapes, shape_type, body, shape, color=LIGHT_ORANGE):
     """
     Adds a shape to the space and the list of shapes.
     """
@@ -257,6 +246,12 @@ def add_shape(space, shapes, shape_type, body, shape, color):
         obj = Circle(body, shape, color, shape.radius)
     shapes.append(obj)
     space.add(body, shape)
+
+    # Make sure the body is awake
+    body.activate()
+    
+    # Return the newly created object (useful for selection)
+    return obj
 
 def should_collide(body1, body2, connected_components):
     """Check if two bodies should collide based on joint connections."""
@@ -550,45 +545,62 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                               weld_joint_button_rect, pivot_joint_button_rect]
                 clicked_ui = any(btn.collidepoint(pos) for btn in ui_buttons)
                 if not clicked_ui and not adding_joint and not drawing:
-                    p = from_pygame(pos, camera_offset)
-                    clicked_object = None
-                    # Find the topmost object clicked
-                    for obj in reversed(shapes):
-                        try:
-                            info = obj.shape.point_query(p)
-                            is_inside = info.distance < 0 if hasattr(info, 'distance') else False
-                            if is_inside:
-                                clicked_object = obj
-                                break
-                        except Exception as e:
-                            print(f"Drag start query error: {e}")
+                    try:
+                        p = from_pygame(pos, camera_offset)
+                        clicked_object = None
+                        # Find the topmost object clicked
+                        for obj in reversed(shapes):
+                            try:
+                                # Wake up the body first to prevent sleeping-related errors
+                                if obj.body.is_sleeping:
+                                    print(f"Waking up body for drag operation")
+                                    obj.body.activate()
+                                    
+                                # Simple distance-based check for circles
+                                if isinstance(obj.shape, pymunk.Circle):
+                                    dist = math.sqrt((obj.body.position.x - p[0])**2 + 
+                                                     (obj.body.position.y - p[1])**2)
+                                    if dist <= obj.shape.radius:
+                                        clicked_object = obj
+                                        break
+                                # Polygons
+                                elif isinstance(obj.shape, pymunk.Poly):
+                                    vertices = [obj.body.local_to_world(v) for v in obj.shape.get_vertices()]
+                                    if point_in_polygon(p, vertices):
+                                        clicked_object = obj
+                                        break
+                            except Exception as e:
+                                print(f"Drag selection error: {e}")
 
-                    if clicked_object:
-                        # Build the complex of connected objects using connected_components
-                        new_dragged_complex = []  # Reset the complex
-                        clicked_body_id = id(clicked_object.body)
-                        
-                        # Find which component contains the clicked object
-                        for component in connected_components:
-                            if clicked_body_id in component:
-                                # Add all objects that belong to this component
-                                for shape in shapes:
-                                    if id(shape.body) in component:
-                                        new_dragged_complex.append(shape)
-                                break
-                        
-                        # If not part of any component, just drag the clicked object
-                        if not new_dragged_complex:
-                            new_dragged_complex = [clicked_object]
+                        if clicked_object:
+                            # Build the complex of connected objects using connected_components
+                            new_dragged_complex = []  # Reset the complex
+                            clicked_body_id = id(clicked_object.body)
                             
-                        # Store reference to the primary dragged object and offset
-                        offset = clicked_object.body.position - p
-                        new_dragging_object = clicked_object
-                        new_drag_offset = offset
-                        print(f"Dragging complex with {len(new_dragged_complex)} objects")
-                        new_selected_shape = None
-                        new_drawing = False
-                        new_adding_joint = False
+                            # Find which component contains the clicked object
+                            for component in connected_components:
+                                if clicked_body_id in component:
+                                    # Add all objects that belong to this component
+                                    for shape in shapes:
+                                        if id(shape.body) in component:
+                                            new_dragged_complex.append(shape)
+                                    break
+                            
+                            # If not part of any component, just drag the clicked object
+                            if not new_dragged_complex:
+                                new_dragged_complex = [clicked_object]
+                                
+                            # Store reference to the primary dragged object and offset
+                            offset = clicked_object.body.position - p
+                            new_dragging_object = clicked_object
+                            new_drag_offset = offset
+                            print(f"Dragging complex with {len(new_dragged_complex)} objects")
+                            new_selected_shape = None
+                            new_drawing = False
+                            new_adding_joint = False
+                    except Exception as e:
+                        print(f"Error starting drag: {e}")
+                        # Don't crash on drag errors
 
         elif game_mode == SIMULATION_MODE:
             if start_button_rect.collidepoint(pos):
@@ -677,13 +689,19 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                     x = min(x1, x2)
                     y = max(y1, y2) # Pymunk Y is inverted
                     body, shape = create_rectangle(x, y - height, width, height)
-                    add_shape(space, shapes, RECTANGLE, body, shape, BLUE)
+                    # Use the add_shape function and store the returned object
+                    newly_added_object = add_shape(space, shapes, RECTANGLE, body, shape)
+                    # Automatically select the new object
+                    selected_shape_object = newly_added_object
             elif selected_shape == CIRCLE:
                 center_x, center_y = from_pygame(start_pos, camera_offset)
                 radius = math.dist(start_pos, end_pos_up)
                 if radius > 5:
                     body, shape = create_circle(center_x, center_y, radius)
-                    add_shape(space, shapes, CIRCLE, body, shape, RED)
+                    # Use the add_shape function and store the returned object
+                    newly_added_object = add_shape(space, shapes, CIRCLE, body, shape)
+                    # Automatically select the new object
+                    selected_shape_object = newly_added_object
 
             new_selected_shape = None # Stop shape selection
             new_drawing = False
@@ -698,9 +716,11 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
 def draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos, camera_offset=(0, 0)):
     """
     Draws the shape being created (before it's added). Adjusts for camera offset.
+    Draws in screen coordinates relative to the camera view.
     """
     if selected_shape and drawing and end_pos:
-        # Apply camera offset to drawing preview
+        # start_pos and end_pos are already screen coordinates relative to the window.
+        # No camera offset needed here as we are drawing a temporary overlay in screen space.
         if selected_shape == RECTANGLE:
             x1, y1 = start_pos
             x2, y2 = end_pos
@@ -708,14 +728,12 @@ def draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos
             height = abs(y2 - y1)
             x = min(x1, x2)
             y = min(y1, y2)
-            pygame.draw.rect(screen, BLUE, (x, y, width, height), 2)
+            pygame.draw.rect(screen, LIGHT_ORANGE, (x, y, width, height), 2) # Draw outline
         elif selected_shape == CIRCLE:
             x1, y1 = start_pos
-            x2, y2 = end_pos
-            radius = (abs(x2 - x1) + abs(y2 - y1)) / 4
-            x = x1
-            y = y1
-            pygame.draw.circle(screen, RED, (x, y), int(radius), 2)
+            radius = math.dist(start_pos, end_pos) # Use actual distance for radius
+            if radius > 0:
+                 pygame.draw.circle(screen, LIGHT_ORANGE, (x1, y1), int(radius), 2) # Draw outline centered at start
 
 def draw_shapes(screen, shapes):
     """
@@ -1054,7 +1072,7 @@ def draw_continuous_ground(screen, camera_offset):
     ground_left = to_pygame((-extension, 40), camera_offset)[0]
     ground_right = to_pygame((SCREEN_WIDTH + extension, 40), camera_offset)[0]
     
-    pygame.draw.line(screen, BLACK, (ground_left, ground_y), (ground_right, ground_y), 10)
+    pygame.draw.line(screen, GREEN, (ground_left, ground_y), (ground_right, ground_y), 10)
     
     # Optional: Add visual indicators every 100 pixels to show movement
     for x in range(-extension, SCREEN_WIDTH + extension, 100):
@@ -1134,6 +1152,12 @@ def run_simulation():
     camera_offset = (0, 0)
     camera_speed = CAMERA_MOVE_SPEED
 
+    # Transparency factor for selected object
+    selected_alpha_blend = 0.6 # 60% object color, 40% background color
+
+    # For tracking the most recently added object
+    newly_added_object = None
+
     while running:
         # Store previous mode for state change detection
         previous_mode = game_mode
@@ -1206,51 +1230,94 @@ def run_simulation():
                 clicked_ui = any(btn.collidepoint(pos) for btn in ui_buttons)
 
                 if not clicked_ui:
-                    # Clear current selections
-                    selected_shape_object = None
-                    selected_joint_object = None
-                    
-                    # Check for joint selection first
-                    p = from_pygame(pos, camera_offset)
-                    clicked_joint = None
-                    joint_selection_distance = 15  # Radius to check for joint selection
-                    
-                    for joint in joints:
-                        # For PinJoint or PivotJoint, check if click is near joint point
-                        if isinstance(joint, PivotJoint) or isinstance(joint, WeldJoint):
-                            if joint.body_a:  # Ensure body_a exists
-                                try:
-                                    # Use safe operation to get joint position
-                                    def get_joint_pos(anchor_local):
-                                        return joint.body_a.local_to_world(anchor_local)
-                                    
-                                    joint_pos = safe_body_operation(joint.body_a, 
-                                                                  get_joint_pos, 
-                                                                  joint.anchor_a_local)
-                                    
-                                    dist = math.sqrt((joint_pos[0] - p[0])**2 + (joint_pos[1] - p[1])**2)
-                                    if dist <= joint_selection_distance:
-                                        clicked_joint = joint
-                                        break
-                                except Exception as e:
-                                    print(f"Joint selection error: {e}")
-                                    continue
-                    
-                    if clicked_joint:
-                        selected_joint_object = clicked_joint
-                        print(f"Selected joint: {clicked_joint.joint_type}")
-                    else:
-                        # Check for shape selection
-                        for obj in reversed(shapes):
+                    print("Processing selection click...")
+                    try:
+                        # Get world coordinates for the click
+                        p = from_pygame(pos, camera_offset)
+                        print(f"Click at world coordinates: {p}")
+                        
+                        # Track previous selection to handle re-selection properly
+                        prev_shape = selected_shape_object
+                        prev_joint = selected_joint_object
+                        
+                        # Always clear selection first - this is critical
+                        print("Clearing previous selection")
+                        selected_shape_object = None
+                        selected_joint_object = None
+                        property_buttons = {}
+                        joint_menu_buttons = {}
+                        
+                        # Try to select a joint first
+                        joint_selection_distance = 15
+                        print(f"Checking {len(joints)} joints for selection...")
+                        for joint in joints:
                             try:
-                                info = obj.shape.point_query(p)
-                                is_inside = info.distance < 0 if hasattr(info, 'distance') else False
-                                if is_inside:
-                                    selected_shape_object = obj
-                                    print(f"Selected object: {type(selected_shape_object)}")
-                                    break
+                                if isinstance(joint, PivotJoint) or isinstance(joint, WeldJoint):
+                                    if joint.body_a:
+                                        # Wake up the body to avoid sleeping issues
+                                        if joint.body_a.is_sleeping:
+                                            print(f"Waking up joint body_a")
+                                            joint.body_a.activate()
+                                        
+                                        # Calculate joint position
+                                        try:
+                                            joint_pos = joint.body_a.local_to_world(joint.anchor_a_local)
+                                            dist = math.sqrt((joint_pos[0] - p[0])**2 + (joint_pos[1] - p[1])**2)
+                                            
+                                            if dist <= joint_selection_distance:
+                                                print(f"Selected joint: {joint.joint_type} at {joint_pos}")
+                                                selected_joint_object = joint
+                                                # Wake up both bodies
+                                                if joint.body_b and joint.body_b.is_sleeping:
+                                                    joint.body_b.activate()
+                                                break
+                                        except Exception as e:
+                                            print(f"Error calculating joint position: {e}")
                             except Exception as e:
-                                print(f"Selection query error: {e}")
+                                print(f"Joint selection error: {e}")
+                        
+                        # If no joint was selected, try to select a shape
+                        if not selected_joint_object:
+                            print(f"No joint selected. Checking {len(shapes)} shapes...")
+                            for obj in reversed(shapes):
+                                try:
+                                    # Wake up the body first to prevent sleeping-related errors
+                                    if obj.body.is_sleeping:
+                                        print(f"Waking up shape body")
+                                        obj.body.activate()
+                                        
+                                    # Simple distance-based selection for circles
+                                    if isinstance(obj.shape, pymunk.Circle):
+                                        dist = math.sqrt((obj.body.position.x - p[0])**2 + 
+                                                        (obj.body.position.y - p[1])**2)
+                                        if dist <= obj.shape.radius:
+                                            print(f"Selected circle at {obj.body.position} with radius {obj.shape.radius}")
+                                            selected_shape_object = obj
+                                            break
+                                    # Polygon/rectangle selection
+                                    elif isinstance(obj.shape, pymunk.Poly):
+                                        try:
+                                            # Use safer boundary check instead of point_query
+                                            vertices = [obj.body.local_to_world(v) for v in obj.shape.get_vertices()]
+                                            if point_in_polygon(p, vertices):
+                                                print(f"Selected polygon with {len(vertices)} vertices")
+                                                selected_shape_object = obj
+                                                break
+                                        except Exception as e:
+                                            print(f"Error in polygon selection: {e}")
+                                except Exception as e:
+                                    print(f"Shape selection error: {e}")
+                        
+                        if not selected_shape_object and not selected_joint_object:
+                            print("Selection cleared (clicked background).")
+                        elif prev_shape != selected_shape_object or prev_joint != selected_joint_object:
+                            print("Selection changed.")
+                    
+                    except Exception as e:
+                        print(f"*** CRITICAL: Selection error: {e}")
+                        # Don't crash the whole app on selection errors
+                        import traceback
+                        traceback.print_exc()
 
             # Pass camera_offset to handle_input but don't handle arrow keys there
             game_mode, selected_shape, drawing, start_pos, adding_joint, joint_type, \
@@ -1284,15 +1351,34 @@ def run_simulation():
         if mode_changed:
             if game_mode == SIMULATION_MODE:
                 print("Starting Simulation")
+                # Reset all selections when entering simulation mode
+                selected_shape_object = None
+                selected_joint_object = None
+                property_buttons = {}
+                joint_menu_buttons = {}
+                adding_joint = False
+                drawing = False
+                
+                # Store states for all bodies before simulation
                 initial_body_states = {id(obj.body): (obj.body.position, obj.body.angle, obj.body.velocity, obj.body.angular_velocity) for obj in shapes}
+                
+                # Activate all bodies for simulation
                 for obj in shapes:
                     obj.apply_mass()
                     obj.body.activate()
-                selected_shape_object = None
-                selected_joint_object = None
-                adding_joint = False
+                
             elif game_mode == EDIT_MODE:
                 print("Stopping Simulation - Restoring Edit State")
+                
+                # First, activate all objects
+                print("Activating all bodies before restoring positions")
+                for obj in shapes:
+                    obj.body.activate()
+                
+                # Wait a bit for Chipmunk to process the activations
+                space.step(0.001)
+                
+                # Now restore positions
                 for obj in shapes:
                     body_id = id(obj.body)
                     if body_id in initial_body_states:
@@ -1301,84 +1387,89 @@ def run_simulation():
                         obj.body.angle = angle
                         obj.body.velocity = (0, 0)
                         obj.body.angular_velocity = 0
-                    obj.body.sleep()
+                
+                # Reset drag state
                 dragging_object = None
                 drag_offset = None
+                dragged_complex = []
+                
+                # Reset selection state when exiting simulation
+                selected_shape_object = None
+                selected_joint_object = None
+                property_buttons = {}
+                joint_menu_buttons = {}
 
-        # --- Drawing (with camera offset) ---
-        screen.fill(WHITE)
+        # Physics simulation update (only in simulation mode)
+        if game_mode == SIMULATION_MODE:
+            dt = 1.0 / FPS
+            space.step(dt)
+
+        # Wake up currently selected object before drawing (prevents NaN drawing errors)
+        if selected_shape_object and game_mode == EDIT_MODE:
+            try:
+                if selected_shape_object.body and selected_shape_object.body.is_sleeping:
+                    selected_shape_object.body.activate()
+            except Exception as e:
+                print(f"Error activating selected object: {e}")
+        
+        # Wake up currently selected joint objects before drawing
+        if selected_joint_object and game_mode == EDIT_MODE:
+            try:
+                if selected_joint_object.body_a and selected_joint_object.body_a.is_sleeping:
+                    selected_joint_object.body_a.activate()
+                if selected_joint_object.body_b and selected_joint_object.body_b.is_sleeping:
+                    selected_joint_object.body_b.activate()
+            except Exception as e:
+                print(f"Error activating joint bodies: {e}")
+                
+        # --- Drawing with safety checks (with camera offset) ---
+        screen.fill(SKY_BLUE)
         
         # Draw continuous ground
         draw_continuous_ground(screen, camera_offset)
         
-        # Draw all shapes with camera offset
+        # Draw all shapes using their draw methods
         for obj in shapes:
-            # Override the draw methods to account for camera
-            if isinstance(obj, Rectangle):
-                # Get vertices relative to the body's center of gravity
-                local_verts = obj.shape.get_vertices()
-                # Transform local vertices to world coordinates 
-                world_verts = [obj.body.local_to_world(v) for v in local_verts]
-                # Convert world coordinates to Pygame screen coordinates with camera offset
-                pygame_verts = [to_pygame(v, camera_offset) for v in world_verts]
-                # Draw the polygon
-                pygame.draw.polygon(screen, obj.color, pygame_verts)
-            elif isinstance(obj, Circle):
-                position = to_pygame(obj.body.position, camera_offset)
-                pygame.draw.circle(screen, obj.color, position, int(obj.radius))
-                angle_radians = obj.body.angle
-                end_point_x = position[0] + obj.radius * math.cos(angle_radians)
-                end_point_y = position[1] + obj.radius * math.sin(angle_radians)
-                pygame.draw.line(screen, BLACK, position, (end_point_x, end_point_y), 2)
-        
-        # Draw joints with camera offset
+            original_color = obj.color
+            try:
+                # Ensure object has valid position before drawing
+                if hasattr(obj.body, 'position') and isinstance(obj.body.position, tuple):
+                    x, y = obj.body.position
+                    if math.isnan(x) or math.isnan(y) or math.isinf(x) or math.isinf(y):
+                        print(f"Warning: Object {id(obj)} has invalid position {obj.body.position}")
+                        continue
+                    
+                # Check if this object is selected in edit mode
+                if game_mode == EDIT_MODE and obj == selected_shape_object:
+                    # Calculate blended color for highlighting
+                    r, g, b = obj.color
+                    bg_r, bg_g, bg_b = SKY_BLUE
+                    blend_r = int(r * selected_alpha_blend + bg_r * (1 - selected_alpha_blend))
+                    blend_g = int(g * selected_alpha_blend + bg_g * (1 - selected_alpha_blend))
+                    blend_b = int(b * selected_alpha_blend + bg_b * (1 - selected_alpha_blend))
+                    obj.color = (blend_r, blend_g, blend_b)
+
+                # Draw the object
+                obj.draw(screen, camera_offset)
+            except Exception as e:
+                print(f"Error drawing shape {type(obj)}: {e}")
+            finally:
+                # Restore original color
+                obj.color = original_color
+
+        # Draw joints using their draw methods
         for joint in joints:
-            if isinstance(joint, PinJoint):
-                if joint.body_a:
-                    pos_a = to_pygame(joint.body_a.position + joint.anchor_a, camera_offset)
-                else:
-                    pos_a = to_pygame(joint.anchor_a, camera_offset)
-                if joint.body_b:
-                    pos_b = to_pygame(joint.body_b.position + joint.anchor_b, camera_offset)
-                else:
-                    pos_b = to_pygame(joint.anchor_b, camera_offset)
-                pygame.draw.line(screen, GREEN, pos_a, pos_b, 2)
-                pygame.draw.circle(screen, RED, pos_a, 5)
-                pygame.draw.circle(screen, RED, pos_b, 5)
-            elif isinstance(joint, PivotJoint):
-                if joint.body_a:
-                    current_joint_world_pos = joint.body_a.local_to_world(joint.anchor_a_local)
-                    joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
-                    pygame.draw.circle(screen, RED, joint_pos_pygame, 6)
-                    pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)
-                    
-                    if joint.body_b:
-                        pos_a = to_pygame(joint.body_a.position, camera_offset)
-                        pos_b = to_pygame(joint.body_b.position, camera_offset)
-                        pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_a, 1)
-                        pygame.draw.line(screen, GRAY, joint_pos_pygame, pos_b, 1)
-            elif isinstance(joint, WeldJoint):
-                if joint.body_a:
-                    current_joint_world_pos = joint.body_a.local_to_world(joint.anchor_a_local)
-                    joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
-                    
-                    square_size = 10
-                    pygame.draw.rect(screen, BLACK,
-                                    (joint_pos_pygame[0] - square_size//2,
-                                     joint_pos_pygame[1] - square_size//2,
-                                     square_size, square_size))
-                    
-                    if joint.body_b:
-                        pos_a = to_pygame(joint.body_a.position, camera_offset)
-                        pos_b = to_pygame(joint.body_b.position, camera_offset)
-                        pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_a, 1)
-                        pygame.draw.line(screen, BLACK, joint_pos_pygame, pos_b, 1)
-        
-        # Draw shape being created with camera offset
+             try:
+                 joint.draw(screen, camera_offset)
+             except Exception as e:
+                 print(f"Error drawing joint {type(joint)}: {e}")
+
+        # Draw shape being created (uses screen coordinates directly)
         if drawing and start_pos and end_pos:
-             draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos)
-        
-        # Draw UI elements (no camera offset since they're in screen space)
+             # Pass camera offset, even if not used internally by this specific function currently
+             draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos, camera_offset)
+
+        # Draw UI elements (no camera offset needed)
         draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button_text,
                 weld_joint_button_rect, weld_joint_button_text,
                 pivot_joint_button_rect, pivot_joint_button_text,
@@ -1386,30 +1477,53 @@ def run_simulation():
                 circle_button_rect, circle_button_text,
                 adding_joint, joint_type, camera_offset)
         
-        # Draw Properties Menu if an object is selected
+        # Draw Properties Menu / Joint Menu (UI, no offset needed)
         if game_mode == EDIT_MODE:
             if selected_shape_object:
+                # Ensure property_buttons is updated ONLY when drawing the menu
                 property_buttons = draw_properties_menu(screen, selected_shape_object, font) or {}
-                selected_joint_object = None  # Clear joint selection when shape is selected
             elif selected_joint_object:
+                # Ensure joint_menu_buttons is updated ONLY when drawing the menu
                 joint_menu_buttons = draw_joint_menu(screen, selected_joint_object, font) or {}
-                selected_shape_object = None  # Clear shape selection when joint is selected
+            # else: # No object selected, button dictionaries should be empty from the click handling
 
         # --- Draw Custom Cursor ---
         if show_custom_cursor:
             mouse_pos = pygame.mouse.get_pos()
-            pygame.draw.circle(screen, RED, mouse_pos, 8, 2) # Red circle cursor
+            pygame.draw.circle(screen, BLACK, mouse_pos, 8, 2) # Change cursor color to BLACK (already hollow with thickness 2)
 
-        # Physics simulation update
-        if game_mode == SIMULATION_MODE:
-            dt = 1.0 / FPS
-            space.step(dt)
-        
         pygame.display.flip()
         clock.tick(FPS)
 
     pygame.quit()
     sys.exit()
+
+def point_in_polygon(point, polygon):
+    """
+    Determine if a point is inside a polygon using the ray casting algorithm.
+    """
+    try:
+        x, y = point
+        n = len(polygon)
+        inside = False
+        
+        if n < 3:  # Not enough points to form a polygon
+            return False
+            
+        p1x, p1y = polygon[0]
+        for i in range(n + 1):
+            p2x, p2y = polygon[i % n]
+            if y > min(p1y, p2y) and y <= max(p1y, p2y) and x <= max(p1x, p2x):
+                if p1y != p2y:
+                    xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                if p1x == p2x or x <= xinters:
+                    inside = not inside
+            p1x, p1y = p2x, p2y
+        
+        return inside
+    except Exception as e:
+        print(f"Error in point_in_polygon: {e}")
+        return False
 
 if __name__ == "__main__":
     run_simulation()

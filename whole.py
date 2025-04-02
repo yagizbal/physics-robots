@@ -497,47 +497,74 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
             elif adding_joint:
                 # Convert screen coordinates to world coordinates with camera offset
                 p_world = from_pygame(pos, camera_offset)
-                print(f"Joint placement at screen coords {pos}, world coords {p_world} with camera offset {camera_offset}")
-                search_radius = 15
-                objects_at_pos = []
-                # Find overlapping objects
-                for obj in reversed(shapes):
-                    try:
-                        if isinstance(obj.shape, pymunk.Circle):
-                            dist_sq = obj.body.position.get_dist_sqrd(p_world)
-                            if dist_sq <= (obj.shape.radius + search_radius)**2:
-                                objects_at_pos.append(obj)
-                                print(f"Found circle at {obj.body.position}, distance: {math.sqrt(dist_sq)}")
-                        elif isinstance(obj.shape, pymunk.Poly):
-                            info = obj.shape.point_query(p_world)
-                            if info.distance <= search_radius:
-                                objects_at_pos.append(obj)
-                                print(f"Found poly at {obj.body.position}, distance: {info.distance}")
-                    except Exception as e:
-                        print(f"Overlap check error: {e}")
+                print(f"Joint placement attempt at screen coords {pos}, world coords {p_world} with camera offset {camera_offset}")
+                search_radius = 15 # How close the click needs to be
+                objects_near_click = [] # Store tuples of (distance_sq, object)
 
-                print(f"Found {len(objects_at_pos)} objects near {p_world} for {joint_type} joint.")
-                if len(objects_at_pos) >= 2:
-                    body1 = objects_at_pos[0].body
-                    body2 = objects_at_pos[1].body
+                # Find overlapping objects and calculate distance to click point
+                for obj in shapes: # Iterate through all shapes
+                    try:
+                        # Use body position as the reference point for distance calculation
+                        obj_pos = obj.body.position
+                        dist_sq = obj_pos.get_dist_sqrd(p_world)
+                        is_close_enough = False
+
+                        # Check if click is within search radius of the object's bounds
+                        if isinstance(obj.shape, pymunk.Circle):
+                            # Check distance from center + radius against search radius
+                            if dist_sq <= (obj.shape.radius + search_radius)**2:
+                                is_close_enough = True
+                        elif isinstance(obj.shape, pymunk.Poly):
+                            # For polys, check if the click is near the bounding box first for efficiency
+                            # A simple check: distance from center vs rough diagonal + search radius
+                            # This is an approximation but avoids complex point-in-poly checks here
+                            half_width = (obj.shape.bb.right - obj.shape.bb.left) / 2
+                            half_height = (obj.shape.bb.top - obj.shape.bb.bottom) / 2
+                            rough_radius_sq = half_width**2 + half_height**2
+                            if dist_sq <= rough_radius_sq + search_radius**2 * 2: # Heuristic check
+                                # More precise check (optional but better):
+                                info = obj.shape.point_query(p_world)
+                                if info.distance <= search_radius:
+                                     is_close_enough = True
+
+                        if is_close_enough:
+                            objects_near_click.append((dist_sq, obj))
+                            print(f"Found object {type(obj).__name__} at {obj_pos}, dist_sq: {dist_sq}")
+
+                    except Exception as e:
+                        print(f"Overlap/distance check error: {e}")
+
+                # Sort the found objects by distance (closest first)
+                objects_near_click.sort(key=lambda item: item[0])
+
+                print(f"Found {len(objects_near_click)} objects near click, sorted by distance.")
+
+                if len(objects_near_click) >= 2:
+                    # Select the two closest objects
+                    body1 = objects_near_click[0][1].body
+                    body2 = objects_near_click[1][1].body
                     body1_id = id(body1)
                     body2_id = id(body2)
-                    
-                    # Check if these bodies should already not collide
+
+                    print(f"Selected closest bodies: {type(objects_near_click[0][1]).__name__} and {type(objects_near_click[1][1]).__name__}")
+
+                    # Check if these bodies are already connected
                     already_connected = False
                     for component in connected_components:
                         if body1_id in component and body2_id in component:
                             already_connected = True
+                            print("Selected bodies are already connected.")
                             break
-                    
+
                     if not already_connected:
+                        # Add the joint using the world click position as the anchor
                         add_joint(space, joints, new_joint_type, body1, body2, p_world, connected_components)
                         print(f"{new_joint_type.capitalize()} joint created between bodies near {p_world}")
-                        new_adding_joint = False # Turn off after success
-                    else:
-                        print("Bodies already connected.")
+                        new_adding_joint = False # Turn off after successful joint creation
+                    # else: # Already printed message above
+                    #    pass
                 else:
-                    print("Need at least two overlapping objects near the click point.")
+                    print("Need at least two objects near the click point to create a joint.")
             # --- Shape Drawing Start ---
             elif selected_shape and not drawing:
                  new_drawing = True
@@ -559,12 +586,12 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                             try:
                                 # Wake up the body first to prevent sleeping-related errors
                                 if obj.body.is_sleeping:
-                                    print(f"Waking up body for drag operation")
+                                    # print(f"Waking up body for drag operation") # Less verbose
                                     obj.body.activate()
-                                    
+
                                 # Simple distance-based check for circles
                                 if isinstance(obj.shape, pymunk.Circle):
-                                    dist = math.sqrt((obj.body.position.x - p[0])**2 + 
+                                    dist = math.sqrt((obj.body.position.x - p[0])**2 +
                                                      (obj.body.position.y - p[1])**2)
                                     if dist <= obj.shape.radius:
                                         clicked_object = obj
@@ -582,7 +609,7 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                             # Build the complex of connected objects using connected_components
                             new_dragged_complex = []  # Reset the complex
                             clicked_body_id = id(clicked_object.body)
-                            
+
                             # Find which component contains the clicked object
                             for component in connected_components:
                                 if clicked_body_id in component:
@@ -591,11 +618,11 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                                         if id(shape.body) in component:
                                             new_dragged_complex.append(shape)
                                     break
-                            
+
                             # If not part of any component, just drag the clicked object
                             if not new_dragged_complex:
                                 new_dragged_complex = [clicked_object]
-                                
+
                             # Store reference to the primary dragged object and offset
                             offset = clicked_object.body.position - p
                             new_dragging_object = clicked_object
@@ -644,21 +671,21 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
                             # Rebuild dragged_complex
                             new_dragged_complex = [obj for obj in shapes if id(obj.body) in component]
                             break
-                    
+
                     # If still empty, just use the main dragged object
                     if not new_dragged_complex:
                         new_dragged_complex = [dragging_object]
-                
+
                 # Calculate the position delta for the primary dragged object
                 target_pos = p + new_drag_offset
                 delta_pos = target_pos - dragging_object.body.position
-                
+
                 # Move all objects in the complex by the same delta
                 for obj in new_dragged_complex:
                     obj.body.position += delta_pos
                     # Make sure to activate the body so it registers position changes
                     obj.body.activate()
-            
+
             elif game_mode == SIMULATION_MODE:
                 # Apply velocity to follow mouse (existing logic)
                 target_pos = p + new_drag_offset
@@ -676,12 +703,14 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
             if game_mode == EDIT_MODE:
                 # Put all objects in the complex to sleep
                 for obj in new_dragged_complex:
-                    obj.body.sleep()
-            
+                    # Check if body still exists before trying to sleep
+                    if obj.body and not obj.body._removed:
+                        obj.body.sleep()
+
             new_dragging_object = None
             new_drag_offset = None
             new_dragged_complex = []  # Clear the complex when done dragging
-        
+
         elif selected_shape and drawing:
             # ... (existing shape creation logic - keep this) ...
             end_pos_up = pos
@@ -1091,16 +1120,16 @@ def run_simulation():
     """
     global font, start_button_rect, rect_button_rect, circle_button_rect
     global weld_joint_button_rect, pivot_joint_button_rect
-    
+
     pygame.init()
     pygame.font.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("2D Physics Simulator")
-    
+
     # Initialize fonts early
     font = pygame.font.Font(None, 32)
     small_font = pygame.font.Font(None, 20)
-    
+
     space = pymunk.Space()
     space.gravity = GRAVITY
     space.sleep_time_threshold = 0.5
@@ -1119,7 +1148,8 @@ def run_simulation():
     joints = []
     adding_joint = False
     joint_type = WELD_JOINT # Default joint type
-    initial_body_states = {}
+    initial_body_states = {}  # Store initial positions of all bodies
+    original_states = {}      # Persistent storage of original positions
     dragging_object = None
     drag_offset = None
     dragged_complex = [] # This will now persist between events
@@ -1129,7 +1159,7 @@ def run_simulation():
     # Initialize camera position
     camera_offset = (0, 0)
     camera_speed = CAMERA_MOVE_SPEED
-    
+
     # Track cursor in both screen and world coordinates
     screen_cursor_pos = (0, 0)
     world_cursor_pos = (0, 0)
@@ -1175,7 +1205,7 @@ def run_simulation():
         # --- Update cursor positions ---
         screen_cursor_pos = pygame.mouse.get_pos()
         world_cursor_pos = from_pygame(screen_cursor_pos, camera_offset)
-        
+
         # --- Custom Cursor ---
         show_custom_cursor = adding_joint and joint_type == PIVOT_JOINT and game_mode == EDIT_MODE
         pygame.mouse.set_visible(not show_custom_cursor)
@@ -1187,11 +1217,11 @@ def run_simulation():
 
             # Initialize variable for property button clicks
             clicked_prop_button = False
-            
+
             # Handle property button clicks first if menu is active
             if game_mode == EDIT_MODE and event.type == pygame.MOUSEBUTTONDOWN:
                 pos = screen_cursor_pos  # Use tracked screen cursor position
-                
+
                 # Handle object property buttons
                 if selected_shape_object:
                     for btn_name, btn_rect in property_buttons.items():
@@ -1206,21 +1236,21 @@ def run_simulation():
                                 if "density" in btn_name:
                                     property_name = "density"
                                 elif "friction" in btn_name:
-                                    property_name = "friction"  
+                                    property_name = "friction"
                                 elif "r_" in btn_name:
                                     property_name = "color_r"
                                 elif "g_" in btn_name:
                                     property_name = "color_g"
                                 elif "b_" in btn_name:
                                     property_name = "color_b"
-                                
+
                                 if property_name:
-                                    handle_property_change(selected_shape_object, 
-                                                         property_name, 
+                                    handle_property_change(selected_shape_object,
+                                                         property_name,
                                                          "plus" in btn_name)
                             clicked_prop_button = True
                             break
-                
+
                 # Handle joint menu buttons
                 if selected_joint_object and not clicked_prop_button:
                     for btn_name, btn_rect in joint_menu_buttons.items():
@@ -1231,7 +1261,7 @@ def run_simulation():
                                     selected_joint_object = None
                             clicked_prop_button = True
                             break
-                    
+
                 if clicked_prop_button:
                     continue  # Skip the rest of event processing for this click
 
@@ -1249,18 +1279,18 @@ def run_simulation():
                         # Get world coordinates for the click - now using our tracked world cursor position
                         p = world_cursor_pos
                         print(f"Click at world coordinates: {p}")
-                        
+
                         # Track previous selection to handle re-selection properly
                         prev_shape = selected_shape_object
                         prev_joint = selected_joint_object
-                        
+
                         # Always clear selection first - this is critical
                         print("Clearing previous selection")
                         selected_shape_object = None
                         selected_joint_object = None
                         property_buttons = {}
                         joint_menu_buttons = {}
-                        
+
                         # Try to select a joint first
                         joint_selection_distance = 15
                         print(f"Checking {len(joints)} joints for selection...")
@@ -1272,12 +1302,12 @@ def run_simulation():
                                         if joint.body_a.is_sleeping:
                                             print(f"Waking up joint body_a")
                                             joint.body_a.activate()
-                                        
+
                                         # Calculate joint position
                                         try:
                                             joint_pos = joint.body_a.local_to_world(joint.anchor_a_local)
                                             dist = math.sqrt((joint_pos[0] - p[0])**2 + (joint_pos[1] - p[1])**2)
-                                            
+
                                             if dist <= joint_selection_distance:
                                                 print(f"Selected joint: {joint.joint_type} at {joint_pos}")
                                                 selected_joint_object = joint
@@ -1289,7 +1319,7 @@ def run_simulation():
                                             print(f"Error calculating joint position: {e}")
                             except Exception as e:
                                 print(f"Joint selection error: {e}")
-                        
+
                         # If no joint was selected, try to select a shape
                         if not selected_joint_object:
                             print(f"No joint selected. Checking {len(shapes)} shapes...")
@@ -1299,10 +1329,10 @@ def run_simulation():
                                     if obj.body.is_sleeping:
                                         print(f"Waking up shape body")
                                         obj.body.activate()
-                                        
+
                                     # Simple distance-based selection for circles
                                     if isinstance(obj.shape, pymunk.Circle):
-                                        dist = math.sqrt((obj.body.position.x - p[0])**2 + 
+                                        dist = math.sqrt((obj.body.position.x - p[0])**2 +
                                                         (obj.body.position.y - p[1])**2)
                                         if dist <= obj.shape.radius:
                                             print(f"Selected circle at {obj.body.position} with radius {obj.shape.radius}")
@@ -1321,12 +1351,12 @@ def run_simulation():
                                             print(f"Error in polygon selection: {e}")
                                 except Exception as e:
                                     print(f"Shape selection error: {e}")
-                        
+
                         if not selected_shape_object and not selected_joint_object:
                             print("Selection cleared (clicked background).")
                         elif prev_shape != selected_shape_object or prev_joint != selected_joint_object:
                             print("Selection changed.")
-                    
+
                     except Exception as e:
                         print(f"*** CRITICAL: Selection error: {e}")
                         # Don't crash the whole app on selection errors
@@ -1377,46 +1407,72 @@ def run_simulation():
                         p_world = world_cursor_pos
                         print(f"Joint placement at screen coords {screen_cursor_pos}, world coords {p_world} with camera offset {camera_offset}")
                         search_radius = 15
-                        objects_at_pos = []
-                        
-                        # Find overlapping objects
-                        for obj in reversed(shapes):
+                        objects_near_click = [] # Store tuples of (distance_sq, object)
+
+                        # Find overlapping objects and calculate distance to click point
+                        for obj in shapes: # Iterate through all shapes
                             try:
+                                # Use body position as the reference point for distance calculation
+                                obj_pos = obj.body.position
+                                dist_sq = obj_pos.get_dist_sqrd(p_world)
+                                is_close_enough = False
+
+                                # Check if click is within search radius of the object's bounds
                                 if isinstance(obj.shape, pymunk.Circle):
-                                    dist_sq = obj.body.position.get_dist_sqrd(p_world)
+                                    # Check distance from center + radius against search radius
                                     if dist_sq <= (obj.shape.radius + search_radius)**2:
-                                        objects_at_pos.append(obj)
-                                        print(f"Found circle at {obj.body.position}, distance: {math.sqrt(dist_sq)}")
+                                        is_close_enough = True
                                 elif isinstance(obj.shape, pymunk.Poly):
-                                    info = obj.shape.point_query(p_world)
-                                    if info.distance <= search_radius:
-                                        objects_at_pos.append(obj)
-                                        print(f"Found poly at {obj.body.position}, distance: {info.distance}")
+                                    # For polys, check if the click is near the bounding box first for efficiency
+                                    # A simple check: distance from center vs rough diagonal + search radius
+                                    # This is an approximation but avoids complex point-in-poly checks here
+                                    half_width = (obj.shape.bb.right - obj.shape.bb.left) / 2
+                                    half_height = (obj.shape.bb.top - obj.shape.bb.bottom) / 2
+                                    rough_radius_sq = half_width**2 + half_height**2
+                                    if dist_sq <= rough_radius_sq + search_radius**2 * 2: # Heuristic check
+                                        # More precise check (optional but better):
+                                        info = obj.shape.point_query(p_world)
+                                        if info.distance <= search_radius:
+                                            is_close_enough = True
+
+                                if is_close_enough:
+                                    objects_near_click.append((dist_sq, obj))
+                                    print(f"Found object {type(obj).__name__} at {obj_pos}, dist_sq: {dist_sq}")
+
                             except Exception as e:
-                                print(f"Overlap check error: {e}")
-                        
-                        print(f"Found {len(objects_at_pos)} objects near {p_world} for {joint_type} joint.")
-                        if len(objects_at_pos) >= 2:
-                            body1 = objects_at_pos[0].body
-                            body2 = objects_at_pos[1].body
+                                print(f"Overlap/distance check error: {e}")
+
+                        # Sort the found objects by distance (closest first)
+                        objects_near_click.sort(key=lambda item: item[0])
+
+                        print(f"Found {len(objects_near_click)} objects near click, sorted by distance.")
+
+                        if len(objects_near_click) >= 2:
+                            # Select the two closest objects
+                            body1 = objects_near_click[0][1].body
+                            body2 = objects_near_click[1][1].body
                             body1_id = id(body1)
                             body2_id = id(body2)
-                            
-                            # Check if these bodies should already not collide
+
+                            print(f"Selected closest bodies: {type(objects_near_click[0][1]).__name__} and {type(objects_near_click[1][1]).__name__}")
+
+                            # Check if these bodies are already connected
                             already_connected = False
                             for component in connected_components:
                                 if body1_id in component and body2_id in component:
                                     already_connected = True
+                                    print("Selected bodies are already connected.")
                                     break
-                            
+
                             if not already_connected:
+                                # Add the joint using the world click position as the anchor
                                 add_joint(space, joints, joint_type, body1, body2, p_world, connected_components)
                                 print(f"{joint_type.capitalize()} joint created between bodies near {p_world}")
-                                adding_joint = False # Turn off after success
-                            else:
-                                print("Bodies already connected.")
+                                adding_joint = False # Turn off after successful joint creation
+                            # else: # Already printed message above
+                            #    pass
                         else:
-                            print("Need at least two overlapping objects near the click point.")
+                            print("Need at least two objects near the click point to create a joint.")
                     # Shape drawing start
                     elif selected_shape and not drawing:
                         drawing = True
@@ -1440,10 +1496,10 @@ def run_simulation():
                                         if obj.body.is_sleeping:
                                             print(f"Waking up body for drag operation")
                                             obj.body.activate()
-                                            
+
                                         # Simple distance-based check for circles
                                         if isinstance(obj.shape, pymunk.Circle):
-                                            dist = math.sqrt((obj.body.position.x - p[0])**2 + 
+                                            dist = math.sqrt((obj.body.position.x - p[0])**2 +
                                                             (obj.body.position.y - p[1])**2)
                                             if dist <= obj.shape.radius:
                                                 clicked_object = obj
@@ -1461,7 +1517,7 @@ def run_simulation():
                                     # Build the complex of connected objects using connected_components
                                     dragged_complex = []  # Reset the complex
                                     clicked_body_id = id(clicked_object.body)
-                                    
+
                                     # Find which component contains the clicked object
                                     for component in connected_components:
                                         if clicked_body_id in component:
@@ -1470,11 +1526,11 @@ def run_simulation():
                                                 if id(shape.body) in component:
                                                     dragged_complex.append(shape)
                                             break
-                                    
+
                                     # If not part of any component, just drag the clicked object
                                     if not dragged_complex:
                                         dragged_complex = [clicked_object]
-                                        
+
                                     # Store reference to the primary dragged object and offset
                                     offset = clicked_object.body.position - p
                                     dragging_object = clicked_object
@@ -1515,7 +1571,7 @@ def run_simulation():
                 # Update end_pos for drawing preview
                 if drawing:
                     end_pos = screen_cursor_pos
-                    
+
                 # Handle dragging with tracked cursor positions
                 if dragging_object:
                     p = world_cursor_pos  # Use tracked world position
@@ -1528,21 +1584,21 @@ def run_simulation():
                                     # Rebuild dragged_complex
                                     dragged_complex = [obj for obj in shapes if id(obj.body) in component]
                                     break
-                            
+
                             # If still empty, just use the main dragged object
                             if not dragged_complex:
                                 dragged_complex = [dragging_object]
-                        
+
                         # Calculate the position delta for the primary dragged object
                         target_pos = p + drag_offset
                         delta_pos = target_pos - dragging_object.body.position
-                        
+
                         # Move all objects in the complex by the same delta
                         for obj in dragged_complex:
                             obj.body.position += delta_pos
                             # Make sure to activate the body so it registers position changes
                             obj.body.activate()
-                    
+
                     elif game_mode == SIMULATION_MODE:
                         # Apply velocity to follow mouse
                         target_pos = p + drag_offset
@@ -1554,18 +1610,20 @@ def run_simulation():
             elif event.type == pygame.MOUSEBUTTONUP:
                 # Use tracked screen cursor position
                 pos = screen_cursor_pos
-                
+
                 if dragging_object:
                     # Stop dragging
                     if game_mode == EDIT_MODE:
                         # Put all objects in the complex to sleep
                         for obj in dragged_complex:
-                            obj.body.sleep()
-                    
+                            # Check if body still exists and is part of the space before trying to sleep
+                            if obj.body and obj.body.space is space:
+                                obj.body.sleep()
+
                     dragging_object = None
                     drag_offset = None
                     dragged_complex = []  # Clear the complex when done dragging
-                
+
                 elif selected_shape and drawing:
                     # ... (existing shape creation logic - keep this) ...
                     end_pos_up = screen_cursor_pos
@@ -1593,169 +1651,198 @@ def run_simulation():
                             # Automatically select the new object
                             selected_shape_object = newly_added_object
 
-                    selected_shape = None  # Stop shape selection
+                    selected_shape = None # Stop shape selection after creation
                     drawing = False
                     start_pos = (0, 0)
+                    end_pos = None # Reset end_pos
 
-            # Handle camera movement with key press and hold
-            # This works in both edit and simulation modes
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_LEFT]:
-                camera_offset = (camera_offset[0] - camera_speed, camera_offset[1])
-            if keys[pygame.K_RIGHT]:
-                camera_offset = (camera_offset[0] + camera_speed, camera_offset[1])
-            if keys[pygame.K_UP]:
-                camera_offset = (camera_offset[0], camera_offset[1] - camera_speed)
-            if keys[pygame.K_DOWN]:
-                camera_offset = (camera_offset[0], camera_offset[1] + camera_speed)
-        
-        # --- State Management for Simulation Start/Stop ---
-        mode_changed = previous_mode != game_mode
-        if mode_changed:
-            if game_mode == SIMULATION_MODE:
-                print("Starting Simulation")
-                # Reset all selections when entering simulation mode
-                selected_shape_object = None
-                selected_joint_object = None
-                property_buttons = {}
-                joint_menu_buttons = {}
-                adding_joint = False
-                drawing = False
-                
-                # Store states for all bodies before simulation
-                initial_body_states = {id(obj.body): (obj.body.position, obj.body.angle, obj.body.velocity, obj.body.angular_velocity) for obj in shapes}
-                
-                # Activate all bodies for simulation
-                for obj in shapes:
-                    obj.apply_mass()
-                    obj.body.activate()
-                
-            elif game_mode == EDIT_MODE:
-                print("Stopping Simulation - Restoring Edit State")
-                
-                # First, activate all objects
-                print("Activating all bodies before restoring positions")
-                for obj in shapes:
-                    obj.body.activate()
-                
-                # Wait a bit for Chipmunk to process the activations
-                space.step(0.001)
-                
-                # Now restore positions
-                for obj in shapes:
-                    body_id = id(obj.body)
-                    if body_id in initial_body_states:
-                        pos, angle, vel, ang_vel = initial_body_states[body_id]
-                        obj.body.position = pos
-                        obj.body.angle = angle
-                        obj.body.velocity = (0, 0)
-                        obj.body.angular_velocity = 0
-                
-                # Reset drag state
-                dragging_object = None
-                drag_offset = None
-                dragged_complex = []
-                
-                # Reset selection state when exiting simulation
-                selected_shape_object = None
-                selected_joint_object = None
-                property_buttons = {}
-                joint_menu_buttons = {}
+            # --- Keyboard Input for Camera ---
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    camera_offset = (camera_offset[0] - camera_speed, camera_offset[1])
+                elif event.key == pygame.K_RIGHT:
+                    camera_offset = (camera_offset[0] + camera_speed, camera_offset[1])
+                elif event.key == pygame.K_UP:
+                    camera_offset = (camera_offset[0], camera_offset[1] + camera_speed)
+                elif event.key == pygame.K_DOWN:
+                    camera_offset = (camera_offset[0], camera_offset[1] - camera_speed)
+                elif event.key == pygame.K_DELETE or event.key == pygame.K_BACKSPACE:
+                    if game_mode == EDIT_MODE:
+                        if selected_shape_object:
+                            if delete_shape(space, shapes, selected_shape_object):
+                                selected_shape_object = None
+                                property_buttons = {} # Clear buttons
+                        elif selected_joint_object:
+                            if delete_joint(space, joints, selected_joint_object, connected_components):
+                                selected_joint_object = None
+                                joint_menu_buttons = {} # Clear buttons
 
-        # Physics simulation update (only in simulation mode)
-        if game_mode == SIMULATION_MODE:
-            dt = 1.0 / FPS
-            space.step(dt)
+        if not running: # Check if QUIT event occurred
+            break
 
-        # Wake up currently selected object before drawing (prevents NaN drawing errors)
-        if selected_shape_object and game_mode == EDIT_MODE:
-            try:
-                if selected_shape_object.body and selected_shape_object.body.is_sleeping:
-                    selected_shape_object.body.activate()
-            except Exception as e:
-                print(f"Error activating selected object: {e}")
-        
-        # Wake up currently selected joint objects before drawing
-        if selected_joint_object and game_mode == EDIT_MODE:
-            try:
-                if selected_joint_object.body_a and selected_joint_object.body_a.is_sleeping:
-                    selected_joint_object.body_a.activate()
-                if selected_joint_object.body_b and selected_joint_object.body_b.is_sleeping:
-                    selected_joint_object.body_b.activate()
-            except Exception as e:
-                print(f"Error activating joint bodies: {e}")
-                
-        # --- Drawing with safety checks (with camera offset) ---
-        screen.fill(SKY_BLUE)
-        
-        # Draw continuous ground
-        draw_continuous_ground(screen, camera_offset)
-        
-        # Draw all shapes using their draw methods
-        for obj in shapes:
-            original_color = obj.color
-            try:
-                # Ensure object has valid position before drawing
-                if hasattr(obj.body, 'position') and isinstance(obj.body.position, tuple):
-                    x, y = obj.body.position
-                    if math.isnan(x) or math.isnan(y) or math.isinf(x) or math.isinf(y):
-                        print(f"Warning: Object {id(obj)} has invalid position {obj.body.position}")
-                        continue
+        # --- State Change Logic ---
+        if previous_mode == EDIT_MODE and game_mode == SIMULATION_MODE:
+            # Store initial states and apply properties
+            print("Switching to SIMULATION mode. Storing initial states.")
+            initial_body_states = {} # Clear any previous states
+            for obj in shapes:
+                try:
+                    # Apply mass, elasticity, friction etc. before simulation starts
+                    obj.apply_mass() # Calculate mass/moment based on shape/density
+                    obj.shape.elasticity = obj.elasticity
+                    obj.shape.friction = obj.friction
+
+                    # Store state: Position, Angle, and ZERO velocities
+                    body_state = {
+                        'position': pymunk.Vec2d(obj.body.position.x, obj.body.position.y),
+                        'angle': obj.body.angle,
+                        'velocity': pymunk.Vec2d(0, 0), # Explicitly store zero velocity
+                        'angular_velocity': 0.0         # Explicitly store zero angular velocity
+                    }
                     
-                # Check if this object is selected in edit mode
-                if game_mode == EDIT_MODE and obj == selected_shape_object:
-                    # Calculate blended color for highlighting
-                    r, g, b = obj.color
-                    bg_r, bg_g, bg_b = SKY_BLUE
-                    blend_r = int(r * selected_alpha_blend + bg_r * (1 - selected_alpha_blend))
-                    blend_g = int(g * selected_alpha_blend + bg_g * (1 - selected_alpha_blend))
-                    blend_b = int(b * selected_alpha_blend + bg_b * (1 - selected_alpha_blend))
-                    obj.color = (blend_r, blend_g, blend_b)
+                    # Store in both dictionaries
+                    initial_body_states[id(obj.body)] = body_state
+                    original_states[id(obj.body)] = body_state
+                    
+                    # Ensure bodies are awake for simulation start
+                    obj.body.activate()
+                except Exception as e:
+                    print(f"Error storing state or activating body {id(obj.body)}: {e}")
 
-                # Draw the object
-                obj.draw(screen, camera_offset)
-            except Exception as e:
-                print(f"Error drawing shape {type(obj)}: {e}")
-            finally:
-                # Restore original color
-                obj.color = original_color
+            # Store joint states if needed in the future
+            for joint in joints:
+                try:
+                    if joint.body_a: joint.body_a.activate()
+                    if joint.body_b: joint.body_b.activate()
+                except Exception as e:
+                    print(f"Error activating joint bodies: {e}")
 
-        # Draw joints using their draw methods
+
+        elif previous_mode == SIMULATION_MODE and game_mode == EDIT_MODE:
+            # Restore initial states
+            print(f"Switching to EDIT mode. Restoring {len(original_states)} original states.")
+            restore_count = 0
+            
+            for obj in shapes:
+                body_id = id(obj.body)
+                if body_id in original_states:
+                    state = original_states[body_id]
+                    # Use safe operations to restore position, angle, and ZERO velocities
+                    try:
+                        # Ensure the body is awake for position change
+                        obj.body.activate()
+                        
+                        # Restore exact position and orientation
+                        obj.body.position = pymunk.Vec2d(state['position'].x, state['position'].y)
+                        obj.body.angle = state['angle']
+                        
+                        # Explicitly zero out all velocities (linear and angular)
+                        obj.body.velocity = pymunk.Vec2d(0, 0)
+                        obj.body.angular_velocity = 0
+                        
+                        # Put body to sleep after resetting
+                        obj.body.sleep()
+                        restore_count += 1
+                    except Exception as e:
+                        print(f"Error restoring body {body_id}: {e}")
+                else:
+                    # If a shape was somehow added during simulation
+                    print(f"Warning: No original state found for body {body_id}. Attempting to sleep.")
+                    try:
+                        obj.body.velocity = pymunk.Vec2d(0, 0)
+                        obj.body.angular_velocity = 0
+                        obj.body.sleep()
+                    except Exception as e:
+                        print(f"Error handling new body: {e}")
+            
+            print(f"Successfully restored {restore_count}/{len(shapes)} objects to original positions")
+            
+            # Keep the original_states dictionary for future restorations
+            # But clear the temporary one used during this simulation run
+            initial_body_states = {}
+            
+            # Ensure selection is cleared and dragging stops
+            selected_shape_object = None
+            selected_joint_object = None
+            property_buttons = {}
+            joint_menu_buttons = {}
+            dragging_object = None
+            dragged_complex = []
+
+        # --- Drawing ---
+        screen.fill(SKY_BLUE) # Background
+
+        # Draw continuous ground based on camera
+        draw_continuous_ground(screen, camera_offset)
+
+        # Draw all shapes with camera offset
+        for obj in shapes:
+            # Apply visual selection highlight in EDIT mode
+            if game_mode == EDIT_MODE and obj == selected_shape_object:
+                # Create a temporary surface for the shape
+                temp_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+                obj.draw(temp_surf, camera_offset) # Draw shape onto temp surface
+
+                # Create a highlight color (e.g., yellow with alpha)
+                highlight_color = (255, 255, 0, 100) # Yellow, semi-transparent
+
+                # Fill the shape area on the temp surface with the highlight color using BLEND_RGBA_MULT
+                # This requires finding the pixels belonging to the shape, which is complex.
+                # A simpler approach: Draw a slightly larger outline or overlay.
+                # Let's draw a yellow outline for simplicity
+                if isinstance(obj, Rectangle):
+                    local_verts = obj.shape.get_vertices()
+                    world_verts = [obj.body.local_to_world(v) for v in local_verts]
+                    pygame_verts = [to_pygame(v, camera_offset) for v in world_verts]
+                    pygame.draw.polygon(screen, (255, 255, 0), pygame_verts, 3) # Yellow outline
+                elif isinstance(obj, Circle):
+                    position = to_pygame(obj.body.position, camera_offset)
+                    pygame.draw.circle(screen, (255, 255, 0), position, int(obj.radius) + 2, 3) # Yellow outline
+
+            # Draw the actual shape (on top of highlight if selected)
+            obj.draw(screen, camera_offset)
+
+        # Draw all joints with camera offset
         for joint in joints:
-            try:
-                joint.draw(screen, camera_offset)
-            except Exception as e:
-                print(f"Error drawing joint {type(joint)}: {e}")
+            # Highlight selected joint
+            if game_mode == EDIT_MODE and joint == selected_joint_object:
+                 # Draw a thicker/different color representation for the selected joint
+                 # Example: Draw a larger circle or square at the joint point
+                 if isinstance(joint, PivotJoint) or isinstance(joint, WeldJoint):
+                     if joint.body_a:
+                         current_joint_world_pos = joint.body_a.local_to_world(joint.anchor_a_local)
+                         joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
+                         pygame.draw.circle(screen, (255, 0, 255), joint_pos_pygame, 8, 3) # Magenta highlight circle
+            # Draw the regular joint representation
+            joint.draw(screen, camera_offset)
 
-        # Draw shape being created (uses screen coordinates directly)
-        if drawing and start_pos and end_pos:
-            # Pass camera offset, even if not used internally by this specific function currently
-            draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos, camera_offset)
+        # Draw shape being created (uses screen coordinates, no offset needed)
+        if drawing and end_pos:
+            draw_shape_being_created(screen, selected_shape, drawing, start_pos, end_pos)
 
-        # Draw UI elements (no camera offset needed for UI)
+        # Draw UI (fixed position, no camera offset)
         draw_ui(screen, game_mode, start_button_rect, start_button_text, stop_button_text,
                 weld_joint_button_rect, weld_joint_button_text,
                 pivot_joint_button_rect, pivot_joint_button_text,
                 rect_button_rect, rect_button_text,
                 circle_button_rect, circle_button_text,
-                adding_joint, joint_type, camera_offset)
-        
-        # Draw Properties Menu / Joint Menu (UI, no offset needed)
+                adding_joint, joint_type, camera_offset) # Pass camera offset for display
+
+        # Draw properties menu if an object is selected in EDIT mode
         if game_mode == EDIT_MODE:
             if selected_shape_object:
-                # Ensure property_buttons is updated ONLY when drawing the menu
-                property_buttons = draw_properties_menu(screen, selected_shape_object, font) or {}
+                property_buttons = draw_properties_menu(screen, selected_shape_object, font)
             elif selected_joint_object:
-                # Ensure joint_menu_buttons is updated ONLY when drawing the menu
-                joint_menu_buttons = draw_joint_menu(screen, selected_joint_object, font) or {}
+                joint_menu_buttons = draw_joint_menu(screen, selected_joint_object, font)
 
-        # --- Draw Custom Cursor ---
+        # Draw custom cursor if adding pivot joint
         if show_custom_cursor:
-            pygame.draw.circle(screen, BLACK, screen_cursor_pos, 8, 2)
+            pygame.draw.circle(screen, BLACK, screen_cursor_pos, 8, 1) # Draw a circle cursor
 
-        # --- Draw cursor position for debugging ---
-        cursor_debug_text = font.render(f"Screen: {screen_cursor_pos}, World: ({world_cursor_pos[0]:.0f}, {world_cursor_pos[1]:.0f})", True, BLACK)
-        screen.blit(cursor_debug_text, (10, SCREEN_HEIGHT - 30))
+        # --- Simulation Step ---
+        if game_mode == SIMULATION_MODE:
+            dt = 1.0 / FPS
+            space.step(dt)
 
         pygame.display.flip()
         clock.tick(FPS)
@@ -1763,32 +1850,24 @@ def run_simulation():
     pygame.quit()
     sys.exit()
 
-def point_in_polygon(point, polygon):
-    """
-    Determine if a point is inside a polygon using the ray casting algorithm.
-    """
-    try:
-        x, y = point
-        n = len(polygon)
-        inside = False
-        
-        if n < 3:  # Not enough points to form a polygon
-            return False
-            
-        p1x, p1y = polygon[0]
-        for i in range(n + 1):
-            p2x, p2y = polygon[i % n]
-            if y > min(p1y, p2y) and y <= max(p1y, p2y) and x <= max(p1x, p2x):
-                if p1y != p2y:
-                    xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                if p1x == p2x or x <= xinters:
-                    inside = not inside
-            p1x, p1y = p2x, p2y
-        
-        return inside
-    except Exception as e:
-        print(f"Error in point_in_polygon: {e}")
-        return False
+# --- Helper Functions (Keep as is) ---
+def point_in_polygon(point, polygon_vertices):
+    """Checks if a point is inside a polygon using the ray casting algorithm."""
+    x, y = point
+    n = len(polygon_vertices)
+    inside = False
+    p1x, p1y = polygon_vertices[0]
+    for i in range(n + 1):
+        p2x, p2y = polygon_vertices[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     run_simulation()

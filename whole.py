@@ -4,8 +4,8 @@ import sys
 import math
 
 # --- Constants ---
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
+SCREEN_WIDTH = 1820
+SCREEN_HEIGHT = 980
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GRAY = (200, 200, 200)
@@ -689,18 +689,6 @@ def handle_input(event, game_mode, selected_shape, drawing, start_pos, shapes, s
             new_drawing = False
             new_start_pos = (0, 0)
 
-    # Handle camera movement with arrow keys
-    elif event.type == pygame.KEYDOWN:
-        if game_mode == EDIT_MODE:  # Only allow camera movement in edit mode
-            if event.key == pygame.K_LEFT:
-                new_camera_offset = (camera_offset[0] - CAMERA_MOVE_SPEED, camera_offset[1])
-            elif event.key == pygame.K_RIGHT:
-                new_camera_offset = (camera_offset[0] + CAMERA_MOVE_SPEED, camera_offset[1])
-            elif event.key == pygame.K_UP:
-                new_camera_offset = (camera_offset[0], camera_offset[1] - CAMERA_MOVE_SPEED)
-            elif event.key == pygame.K_DOWN:
-                new_camera_offset = (camera_offset[0], camera_offset[1] + CAMERA_MOVE_SPEED)
-
     # Return updated state including camera_offset
     return new_game_mode, new_selected_shape, new_drawing, new_start_pos, \
            new_adding_joint, new_joint_type, \
@@ -745,25 +733,25 @@ def draw_joints(screen, joints):
 
 def create_floor(space):
     """
-    Creates a static floor segment at the bottom of the screen.
+    Creates a static floor with extended width to match our continuous ground.
     """
-    # Static body for the floor (position is irrelevant for a static body with world-space shapes)
+    # Create a much wider floor (same extension as in the draw_continuous_ground function)
+    extension = 5000
+    floor_width = SCREEN_WIDTH + (extension * 2)  # Extend in both directions
+    
+    # Static body for the floor
     body = pymunk.Body(body_type=pymunk.Body.STATIC)
-
-    # Define the segment endpoints in Pymunk coordinates.
-    # Let's set the floor surface Y-coordinate.
-    floor_y = 40 # Pymunk Y-coordinate for the floor surface
-    radius = 5   # Thickness of the floor line for collision/drawing
-
-    # Create the segment shape attached to the static body
-    shape = pymunk.Segment(body, (0, floor_y), (SCREEN_WIDTH, floor_y), radius)
-    shape.elasticity = 0.4
-    shape.friction = 0.7
-
-    # Add the static body and the segment shape to the space
+    body.position = (0, 0)  # Position will be at the center of the segment
+    
+    # Create a wide segment shape
+    # Position it at the center point with extension in both directions
+    shape = pymunk.Segment(body, (-extension, 40), (SCREEN_WIDTH + extension, 40), 5.0)
+    shape.friction = 1.0
+    shape.collision_type = 1  # Same collision type as other objects
+    
+    # Add to space
     space.add(body, shape)
-
-    # Return the body and shape (though body isn't used much for static segments)
+    
     return body, shape
 
 def draw_properties_menu(screen, selected_object, font):
@@ -1052,6 +1040,27 @@ def safe_body_operation(body, operation, *args):
         print(f"Body operation error: {e}")
     return None
 
+def draw_continuous_ground(screen, camera_offset):
+    """
+    Draws a continuous ground that extends beyond the visible screen.
+    """
+    # Calculate how far the ground should extend in each direction beyond the screen
+    extension = 5000  # A large value to ensure the ground appears continuous
+    
+    # Calculate ground position in screen coordinates
+    ground_y = to_pygame((0, 40), camera_offset)[1]  # Y-coordinate of ground in screen space
+    
+    # Draw the extended ground line
+    ground_left = to_pygame((-extension, 40), camera_offset)[0]
+    ground_right = to_pygame((SCREEN_WIDTH + extension, 40), camera_offset)[0]
+    
+    pygame.draw.line(screen, BLACK, (ground_left, ground_y), (ground_right, ground_y), 10)
+    
+    # Optional: Add visual indicators every 100 pixels to show movement
+    for x in range(-extension, SCREEN_WIDTH + extension, 100):
+        tick_x = to_pygame((x, 40), camera_offset)[0]
+        pygame.draw.line(screen, (80, 80, 80), (tick_x, ground_y - 5), (tick_x, ground_y + 5), 2)
+
 def run_simulation():
     """
     Runs the main game loop.
@@ -1123,6 +1132,7 @@ def run_simulation():
 
     # Initialize camera position
     camera_offset = (0, 0)
+    camera_speed = CAMERA_MOVE_SPEED
 
     while running:
         # Store previous mode for state change detection
@@ -1242,7 +1252,7 @@ def run_simulation():
                             except Exception as e:
                                 print(f"Selection query error: {e}")
 
-            # Handle general input with camera offset
+            # Pass camera_offset to handle_input but don't handle arrow keys there
             game_mode, selected_shape, drawing, start_pos, adding_joint, joint_type, \
             dragging_object, drag_offset, dragged_complex, camera_offset = handle_input(
                 event, game_mode, selected_shape, drawing, start_pos, shapes, space,
@@ -1257,6 +1267,18 @@ def run_simulation():
             elif event.type != pygame.MOUSEMOTION:
                  end_pos = None
 
+        # Handle camera movement with key press and hold
+        # This works in both edit and simulation modes
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT]:
+            camera_offset = (camera_offset[0] - camera_speed, camera_offset[1])
+        if keys[pygame.K_RIGHT]:
+            camera_offset = (camera_offset[0] + camera_speed, camera_offset[1])
+        if keys[pygame.K_UP]:
+            camera_offset = (camera_offset[0], camera_offset[1] - camera_speed)
+        if keys[pygame.K_DOWN]:
+            camera_offset = (camera_offset[0], camera_offset[1] + camera_speed)
+        
         # --- State Management for Simulation Start/Stop ---
         mode_changed = previous_mode != game_mode
         if mode_changed:
@@ -1286,10 +1308,8 @@ def run_simulation():
         # --- Drawing (with camera offset) ---
         screen.fill(WHITE)
         
-        # Draw Floor with camera offset
-        floor_start = to_pygame((0, 40), camera_offset)
-        floor_end = to_pygame((SCREEN_WIDTH, 40), camera_offset)
-        pygame.draw.line(screen, BLACK, floor_start, floor_end, 10)
+        # Draw continuous ground
+        draw_continuous_ground(screen, camera_offset)
         
         # Draw all shapes with camera offset
         for obj in shapes:
@@ -1385,10 +1405,6 @@ def run_simulation():
             dt = 1.0 / FPS
             space.step(dt)
         
-        # Print camera offset for debugging (add this temporarily)
-        print(f"Current camera offset: {camera_offset}")
-        
-        # Update the display
         pygame.display.flip()
         clock.tick(FPS)
 

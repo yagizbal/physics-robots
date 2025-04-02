@@ -138,6 +138,12 @@ class PivotJoint(Joint):
         self.anchor_a_local = joint.anchor_a
         self.body_a_id = id(joint.a) # Store IDs for potential use
         self.body_b_id = id(joint.b)
+        # Motor control properties
+        self.motor_enabled = False
+        self.cw_key = None  # Key for clockwise rotation
+        self.ccw_key = None # Key for counterclockwise rotation
+        self.motor_speed = 5.0  # Default motor speed (rad/s)
+        self.motor_force = 1000000  # Default maximum motor force
 
     def draw(self, screen, camera_offset=(0, 0)):
         """Draws the pivot joint."""
@@ -147,8 +153,14 @@ class PivotJoint(Joint):
         current_joint_world_pos = self.body_a.local_to_world(self.anchor_a_local)
         joint_pos_pygame = to_pygame(current_joint_world_pos, camera_offset)
 
-        pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6)
-        pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)
+        # Draw differently if motor is enabled
+        if self.motor_enabled:
+            # Draw a filled circle with a different color to indicate motor
+            pygame.draw.circle(screen, (100, 100, 255), joint_pos_pygame, 6)  # Blue-ish filled circle
+            pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)  # Black outline
+        else:
+            pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6)
+            pygame.draw.circle(screen, BLACK, joint_pos_pygame, 6, 1)
 
         if self.body_b:
             pos_a = to_pygame(self.body_a.position, camera_offset)
@@ -933,7 +945,7 @@ def draw_joint_menu(screen, selected_joint, font):
         
     # Menu background
     menu_width = 200
-    menu_height = 120
+    menu_height = 240 if isinstance(selected_joint, PivotJoint) else 120
     menu_x = 10
     menu_y = 150
     pygame.draw.rect(screen, GRAY, (menu_x, menu_y, menu_width, menu_height))
@@ -949,16 +961,73 @@ def draw_joint_menu(screen, selected_joint, font):
     joint_type_text = font.render(f"Type: {selected_joint.joint_type}", True, BLACK)
     screen.blit(joint_type_text, (menu_x + 10, type_y))
     
-    # Delete button
-    delete_y = type_y + 40
+    buttons = {}
+    
+    # Special controls for pivot joints
+    if isinstance(selected_joint, PivotJoint):
+        # Motor control checkbox
+        motor_y = type_y + 40
+        motor_text = font.render("Motor Control:", True, BLACK)
+        screen.blit(motor_text, (menu_x + 10, motor_y))
+        
+        # Checkbox rectangle
+        checkbox_rect = pygame.Rect(menu_x + 160, motor_y, 20, 20)
+        pygame.draw.rect(screen, WHITE, checkbox_rect)
+        pygame.draw.rect(screen, BLACK, checkbox_rect, 2)
+        
+        # Mark checkbox if enabled
+        if selected_joint.motor_enabled:
+            pygame.draw.line(screen, BLACK, (checkbox_rect.left + 4, checkbox_rect.centery), 
+                            (checkbox_rect.centerx - 2, checkbox_rect.bottom - 4), 3)
+            pygame.draw.line(screen, BLACK, (checkbox_rect.centerx - 2, checkbox_rect.bottom - 4),
+                            (checkbox_rect.right - 4, checkbox_rect.top + 4), 3)
+        
+        # Key mapping fields
+        cw_y = motor_y + 35
+        ccw_y = cw_y + 35
+        
+        # Draw field labels
+        cw_text = font.render("Rotate CW:", True, BLACK)
+        ccw_text = font.render("Rotate CCW:", True, BLACK)
+        screen.blit(cw_text, (menu_x + 10, cw_y))
+        screen.blit(ccw_text, (menu_x + 10, ccw_y))
+        
+        # Draw key input fields
+        cw_rect = pygame.Rect(menu_x + 120, cw_y, 50, 25)
+        ccw_rect = pygame.Rect(menu_x + 120, ccw_y, 50, 25)
+        pygame.draw.rect(screen, WHITE, cw_rect)
+        pygame.draw.rect(screen, WHITE, ccw_rect)
+        pygame.draw.rect(screen, BLACK, cw_rect, 2)
+        pygame.draw.rect(screen, BLACK, ccw_rect, 2)
+        
+        # Show current key bindings if set
+        if selected_joint.cw_key:
+            cw_key_text = font.render(selected_joint.cw_key, True, BLACK)
+            cw_text_rect = cw_key_text.get_rect(center=cw_rect.center)
+            screen.blit(cw_key_text, cw_text_rect)
+        
+        if selected_joint.ccw_key:
+            ccw_key_text = font.render(selected_joint.ccw_key, True, BLACK)
+            ccw_text_rect = ccw_key_text.get_rect(center=ccw_rect.center)
+            screen.blit(ccw_key_text, ccw_text_rect)
+        
+        # Store button/field rectangles
+        buttons["motor_checkbox"] = checkbox_rect
+        buttons["cw_key_field"] = cw_rect
+        buttons["ccw_key_field"] = ccw_rect
+        
+    # Delete button at the bottom
+    delete_y = menu_height - 40 + menu_y
     delete_button_rect = pygame.Rect(menu_x + 50, delete_y, 100, 30)
     pygame.draw.rect(screen, (255, 0, 0), delete_button_rect)  # Red button
     delete_text = font.render("Delete", True, WHITE)
     delete_text_rect = delete_text.get_rect(center=delete_button_rect.center)
     screen.blit(delete_text, delete_text_rect)
     
-    # Return the delete button for click detection
-    return {"delete": delete_button_rect}
+    # Add delete button
+    buttons["delete"] = delete_button_rect
+    
+    return buttons
 
 def delete_shape(space, shapes, shape_obj):
     """Removes a shape from the space and the shapes list."""
@@ -1198,6 +1267,10 @@ def run_simulation():
     # For tracking the most recently added object
     newly_added_object = None
 
+    # Add new variables for tracking input state
+    active_key_field = None  # Tracks which key field is being edited
+    key_input_active = False  # Flag to indicate we're waiting for a key press
+
     while running:
         # Store previous mode for state change detection
         previous_mode = game_mode
@@ -1223,7 +1296,7 @@ def run_simulation():
                 pos = screen_cursor_pos  # Use tracked screen cursor position
 
                 # Handle object property buttons
-                if selected_shape_object:
+                if selected_shape_object and property_buttons:
                     for btn_name, btn_rect in property_buttons.items():
                         if btn_rect.collidepoint(pos):
                             if btn_name == "delete":
@@ -1251,17 +1324,40 @@ def run_simulation():
                             clicked_prop_button = True
                             break
 
-                # Handle joint menu buttons
-                if selected_joint_object and not clicked_prop_button:
+                # Handle joint menu buttons - moved this outside the shape property check
+                if selected_joint_object and joint_menu_buttons and not clicked_prop_button:
                     for btn_name, btn_rect in joint_menu_buttons.items():
                         if btn_rect.collidepoint(pos):
+                            clicked_prop_button = True
+                            print(f"Joint menu button clicked: {btn_name}")
+                            
                             if btn_name == "delete":
                                 # Delete the selected joint
                                 if delete_joint(space, joints, selected_joint_object, connected_components):
                                     selected_joint_object = None
-                            clicked_prop_button = True
+                            elif btn_name == "motor_checkbox":
+                                # Toggle motor control
+                                selected_joint_object.motor_enabled = not selected_joint_object.motor_enabled
+                                print(f"Motor enabled: {selected_joint_object.motor_enabled}")
+                                # If enabling, set default keys if none are set
+                                if selected_joint_object.motor_enabled:
+                                    if not selected_joint_object.cw_key:
+                                        selected_joint_object.cw_key = "E"
+                                    if not selected_joint_object.ccw_key:
+                                        selected_joint_object.ccw_key = "R"
+                            elif btn_name == "cw_key_field":
+                                # Activate key input for CW
+                                active_key_field = "cw"
+                                key_input_active = True
+                                print("Waiting for key press for CW rotation...")
+                            elif btn_name == "ccw_key_field":
+                                # Activate key input for CCW
+                                active_key_field = "ccw"
+                                key_input_active = True
+                                print("Waiting for key press for CCW rotation...")
                             break
 
+                # Don't continue to regular click handling if we clicked a UI element
                 if clicked_prop_button:
                     continue  # Skip the rest of event processing for this click
 
@@ -1677,6 +1773,117 @@ def run_simulation():
                                 selected_joint_object = None
                                 joint_menu_buttons = {} # Clear buttons
 
+            # Handle joint menu button clicks
+            if game_mode == EDIT_MODE and event.type == pygame.MOUSEBUTTONDOWN:
+                pos = screen_cursor_pos  # Use tracked screen cursor position
+                
+                # Handle joint property clicks
+                if selected_joint_object and isinstance(selected_joint_object, PivotJoint):
+                    for btn_name, btn_rect in joint_menu_buttons.items():
+                        if btn_rect.collidepoint(pos):
+                            clicked_prop_button = True
+                            
+                            if btn_name == "motor_checkbox":
+                                # Toggle motor control
+                                selected_joint_object.motor_enabled = not selected_joint_object.motor_enabled
+                                # If enabling, set default keys if none are set
+                                if selected_joint_object.motor_enabled:
+                                    if not selected_joint_object.cw_key:
+                                        selected_joint_object.cw_key = "E"
+                                    if not selected_joint_object.ccw_key:
+                                        selected_joint_object.ccw_key = "R"
+                                break
+                            elif btn_name == "cw_key_field":
+                                # Activate key input for CW
+                                active_key_field = "cw"
+                                key_input_active = True
+                                break
+                            elif btn_name == "ccw_key_field":
+                                # Activate key input for CCW
+                                active_key_field = "ccw"
+                                key_input_active = True
+                                break
+                            elif btn_name == "delete":
+                                # Already handled in existing code
+                                pass
+            
+            # Handle key press for key binding assignment - MOVED outside previous condition
+            if key_input_active and event.type == pygame.KEYDOWN:
+                if selected_joint_object and isinstance(selected_joint_object, PivotJoint):
+                    key_name = pygame.key.name(event.key).upper()
+                    print(f"Key pressed for binding: {key_name}")
+                    
+                    # Only accept single letters for simplicity
+                    if len(key_name) == 1 and key_name.isalpha():
+                        if active_key_field == "cw":
+                            selected_joint_object.cw_key = key_name
+                            print(f"CW rotation key set to: {key_name}")
+                        elif active_key_field == "ccw":
+                            selected_joint_object.ccw_key = key_name
+                            print(f"CCW rotation key set to: {key_name}")
+                    
+                    # Reset key input state
+                    key_input_active = False
+                    active_key_field = None
+            
+            # Handle rotation controls in simulation mode
+            if game_mode == SIMULATION_MODE and event.type == pygame.KEYDOWN:
+                # Check all pivot joints to see if the pressed key matches any controls
+                key_name = pygame.key.name(event.key).upper()
+                for joint in joints:
+                    if (isinstance(joint, PivotJoint) and joint.motor_enabled and 
+                        joint.body_a and joint.body_b):
+                        
+                        # Check if the key matches either CW or CCW control
+                        if key_name == joint.cw_key:
+                            # Create or update motor for clockwise rotation
+                            try:
+                                # Create motor if it doesn't exist
+                                if not hasattr(joint, 'motor'):
+                                    joint.motor = pymunk.SimpleMotor(joint.body_a, joint.body_b, joint.motor_speed)
+                                    joint.motor.max_force = joint.motor_force
+                                    space.add(joint.motor)
+                                else:
+                                    # Update existing motor
+                                    joint.motor.rate = joint.motor_speed
+                                
+                                # Activate bodies
+                                joint.body_a.activate()
+                                joint.body_b.activate()
+                            except Exception as e:
+                                print(f"Error creating/updating CW motor: {e}")
+                                
+                        elif key_name == joint.ccw_key:
+                            # Create or update motor for counter-clockwise rotation
+                            try:
+                                # Create motor if it doesn't exist
+                                if not hasattr(joint, 'motor'):
+                                    joint.motor = pymunk.SimpleMotor(joint.body_a, joint.body_b, -joint.motor_speed)
+                                    joint.motor.max_force = joint.motor_force
+                                    space.add(joint.motor)
+                                else:
+                                    # Update existing motor
+                                    joint.motor.rate = -joint.motor_speed
+                                
+                                # Activate bodies
+                                joint.body_a.activate()
+                                joint.body_b.activate()
+                            except Exception as e:
+                                print(f"Error creating/updating CCW motor: {e}")
+            
+            # Handle key release to stop motors
+            if game_mode == SIMULATION_MODE and event.type == pygame.KEYUP:
+                key_name = pygame.key.name(event.key).upper()
+                for joint in joints:
+                    if (isinstance(joint, PivotJoint) and joint.motor_enabled and 
+                        hasattr(joint, 'motor') and (key_name == joint.cw_key or key_name == joint.ccw_key)):
+                        
+                        # Stop the motor
+                        try:
+                            joint.motor.rate = 0
+                        except Exception as e:
+                            print(f"Error stopping motor: {e}")
+
         if not running: # Check if QUIT event occurred
             break
 
@@ -1834,7 +2041,11 @@ def run_simulation():
                 property_buttons = draw_properties_menu(screen, selected_shape_object, font)
             elif selected_joint_object:
                 joint_menu_buttons = draw_joint_menu(screen, selected_joint_object, font)
-
+            else:
+                # Clear both button maps when no selection
+                property_buttons = {}
+                joint_menu_buttons = {}
+                
         # Draw custom cursor if adding pivot joint
         if show_custom_cursor:
             pygame.draw.circle(screen, BLACK, screen_cursor_pos, 8, 1) # Draw a circle cursor
